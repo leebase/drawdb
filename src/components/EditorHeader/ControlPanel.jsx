@@ -73,6 +73,11 @@ import { IconAddArea, IconAddNote, IconAddTable } from "../../icons";
 import LayoutDropdown from "./LayoutDropdown";
 import Sidesheet from "./SideSheet/Sidesheet";
 import Modal from "./Modal/Modal";
+import ErdToolActions from "../ErdToolActions";
+import {
+  diagramToCanonicalProject,
+  renderCanonicalSnowflakeDDL,
+} from "../../erdTool/projectAdapter";
 import { useTranslation } from "react-i18next";
 import { exportSQL } from "../../utils/exportSQL";
 import { databases } from "../../data/databases";
@@ -1245,6 +1250,29 @@ export default function ControlPanel({
         }),
         function: () => {
           if (database === DB.GENERIC) return;
+          if (database === DB.SNOWFLAKE) {
+            try {
+              const project = diagramToCanonicalProject({
+                title,
+                tables,
+                relationships,
+                transform,
+              });
+              const src = renderCanonicalSnowflakeDDL(project);
+              if (!src || !String(src).trim()) {
+                throw new Error("Snowflake export produced empty DDL");
+              }
+              openExportModal(MODAL.CODE);
+              setExportData((prev) => ({
+                ...prev,
+                data: src,
+                extension: "sql",
+              }));
+            } catch (error) {
+              Toast.error(error?.message || "Failed to export Snowflake DDL");
+            }
+            return;
+          }
           openExportModal(MODAL.CODE);
           const src = exportSQL({
             tables: tables,
@@ -1772,6 +1800,7 @@ export default function ControlPanel({
             {header()}
             <div className="flex items-center gap-2 me-7">
               <Slot name="header-actions-start" />
+              <ErdToolActions title={title} setTitle={setTitle} />
               {!isTemplate && (
                 <Button
                   type="primary"
@@ -1865,13 +1894,18 @@ export default function ControlPanel({
                     field="zoom"
                     label={t("zoom")}
                     placeholder={t("zoom")}
+                    min={2}
+                    max={500}
                     suffix={<div className="p-1">%</div>}
-                    onChange={(v) =>
+                    onChange={(v) => {
+                      const percent = Number(v);
+                      if (!Number.isFinite(percent)) return;
+                      const clamped = Math.max(2, Math.min(500, percent));
                       setTransform((prev) => ({
                         ...prev,
-                        zoom: parseFloat(v) * 0.01,
-                      }))
-                    }
+                        zoom: clamped * 0.01,
+                      }));
+                    }}
                   />
                 </Dropdown.Item>
               </Dropdown.Menu>

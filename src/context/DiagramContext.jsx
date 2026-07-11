@@ -37,6 +37,22 @@ export default function DiagramContextProvider({ children }) {
 
   const addTable = (data, addToHistory = true) => {
     const id = nanoid();
+    const snowflakeNamespace =
+      database === DB.SNOWFLAKE
+        ? tables[0]?.namespace &&
+          typeof tables[0].namespace.catalog === "string" &&
+          typeof tables[0].namespace.schema === "string"
+          ? {
+              id: tables[0].namespace.id || `namespace:${tables[0].namespace.catalog}.${tables[0].namespace.schema}`,
+              catalog: tables[0].namespace.catalog,
+              schema: tables[0].namespace.schema,
+            }
+          : {
+              id: "namespace:MODEL.PUBLIC",
+              catalog: "MODEL",
+              schema: "PUBLIC",
+            }
+        : undefined;
     const newTable = {
       id,
       name: `table_${id}`,
@@ -44,25 +60,40 @@ export default function DiagramContextProvider({ children }) {
       y: transform.pan.y,
       locked: false,
       fields: [
-        {
-          name: "id",
-          type: database === DB.GENERIC ? "INT" : "INTEGER",
-          default: "",
-          check: "",
-          primary: true,
-          unique: false,
-          unsigned: true,
-          notNull: true,
-          increment: true,
-          comment: "",
-          id: nanoid(),
-        },
+        database === DB.SNOWFLAKE
+          ? {
+              name: "id",
+              type: "NUMBER",
+              size: "38,0",
+              default: "",
+              check: "",
+              primary: true,
+              unique: false,
+              notNull: true,
+              increment: false,
+              comment: "",
+              id: nanoid(),
+            }
+          : {
+              name: "id",
+              type: database === DB.GENERIC ? "INT" : "INTEGER",
+              default: "",
+              check: "",
+              primary: true,
+              unique: false,
+              unsigned: true,
+              notNull: true,
+              increment: true,
+              comment: "",
+              id: nanoid(),
+            },
       ],
       comment: "",
       indices: [],
       uniqueConstraints: [],
       color: defaultBlue,
       collapsed: false,
+      ...(snowflakeNamespace ? { namespace: snowflakeNamespace } : {}),
     };
     if (data) {
       setTables((prev) => {

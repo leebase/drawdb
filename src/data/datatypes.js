@@ -2244,6 +2244,112 @@ export const mariadbTypes = new Proxy(
   },
 );
 
+const snowflakeTypesBase = {
+  NUMBER: {
+    type: "NUMBER",
+    color: decimalColor,
+    checkDefault: (field) => {
+      return /^-?\d+(\.\d+)?$/.test(field.default);
+    },
+    hasCheck: true,
+    isSized: false,
+    hasPrecision: true,
+    defaultSize: "38,0",
+    canIncrement: false,
+  },
+  FLOAT: {
+    type: "FLOAT",
+    color: decimalColor,
+    checkDefault: (field) => {
+      return doubleRegex.test(field.default);
+    },
+    hasCheck: true,
+    isSized: false,
+    hasPrecision: false,
+  },
+  VARCHAR: {
+    type: "VARCHAR",
+    color: stringColor,
+    checkDefault: (field) => {
+      if (strHasQuotes(field.default)) {
+        return field.default.length - 2 <= field.size;
+      }
+      return field.default.length <= field.size;
+    },
+    hasCheck: true,
+    isSized: true,
+    hasPrecision: false,
+    defaultSize: 255,
+    hasQuotes: true,
+  },
+  DATE: {
+    type: "DATE",
+    color: dateColor,
+    checkDefault: (field) => {
+      return /^\d{4}-\d{2}-\d{2}$/.test(field.default);
+    },
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+    hasQuotes: true,
+  },
+  TIMESTAMP_NTZ: {
+    type: "TIMESTAMP_NTZ",
+    color: dateColor,
+    checkDefault: (field) => {
+      if (field.default.toUpperCase() === "CURRENT_TIMESTAMP()") {
+        return true;
+      }
+      if (field.default.toUpperCase() === "CURRENT_TIMESTAMP") {
+        return true;
+      }
+      return /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2}(\.\d+)?)?$/.test(
+        field.default,
+      );
+    },
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: true,
+    defaultSize: 9,
+    hasQuotes: true,
+  },
+  BOOLEAN: {
+    type: "BOOLEAN",
+    color: booleanColor,
+    checkDefault: (field) => {
+      return (
+        field.default.toLowerCase() === "false" ||
+        field.default.toLowerCase() === "true" ||
+        field.default.toUpperCase() === "FALSE" ||
+        field.default.toUpperCase() === "TRUE" ||
+        field.default === "0" ||
+        field.default === "1"
+      );
+    },
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  BINARY: {
+    type: "BINARY",
+    color: binaryColor,
+    checkDefault: (field) => {
+      return (
+        field.default.length <= field.size && binaryRegex.test(field.default)
+      );
+    },
+    hasCheck: false,
+    isSized: true,
+    hasPrecision: false,
+    defaultSize: 1,
+    hasQuotes: true,
+  },
+};
+
+export const snowflakeTypes = new Proxy(snowflakeTypesBase, {
+  get: (target, prop) => (prop in target ? target[prop] : false),
+});
+
 const dbToTypesBase = {
   [DB.GENERIC]: defaultTypes,
   [DB.MYSQL]: mysqlTypes,
@@ -2252,6 +2358,7 @@ const dbToTypesBase = {
   [DB.MSSQL]: mssqlTypes,
   [DB.MARIADB]: mariadbTypes,
   [DB.ORACLESQL]: oraclesqlTypes,
+  [DB.SNOWFLAKE]: snowflakeTypes,
 };
 
 export const dbToTypes = new Proxy(dbToTypesBase, {

@@ -34,6 +34,22 @@
 
 DrawDB is a robust and user-friendly database entity relationship diagram (ERD) editor right in your browser. Build diagrams with a few clicks, export and import SQL scripts, generate migrations, customize your editor, and more without creating an account. See the full set of features on [here](https://drawdb.app/).
 
+## ERD Tool public fork
+
+This repository is the public AGPL-3.0 editor foundation for ERD Tool. The fork
+started from `drawdb-io/drawdb` commit
+`b24ad20b6588b9b99609e8a03b87efa7b28cf245`. ERD Tool keeps its canonical
+physical model authoritative and converts it into drawDB's editable diagram
+projection; canvas coordinates remain in a separate project layout section.
+
+The ERD Tool action bar opens/saves canonical project JSON, runs ELK-assisted
+layout, and displays Snowflake DDL. Primary, unique, and foreign-key constraints
+on generated standard Snowflake tables are informational and render as
+`NOT ENFORCED`; the fork never adds `RELY` automatically.
+
+See [ERD_TOOL_PATCHES.md](ERD_TOOL_PATCHES.md) for the local patch history and
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for dependency provenance.
+
 ## Getting Started
 
 ### Local Development

@@ -52,6 +52,12 @@ export const databases = new Proxy(
       hasArrays: false,
       beta: true,
     },
+    [DB.SNOWFLAKE]: {
+      name: "Snowflake",
+      label: DB.SNOWFLAKE,
+      image: null,
+      hasTypes: false,
+    },
     [DB.GENERIC]: {
       name: i18n.t("generic"),
       label: DB.GENERIC,

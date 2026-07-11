@@ -243,6 +243,12 @@ export const generateMigrationSQL = (
   database = DB.POSTGRES,
   diagrams,
 ) => {
+  if (database === DB.SNOWFLAKE || database === DB.GENERIC) {
+    throw new Error(
+      `Migration generation is not supported for ${database}`,
+    );
+  }
+
   const q = getQuote(database);
   let up = [];
   let down = [];

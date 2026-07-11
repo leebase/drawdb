@@ -289,7 +289,7 @@ export default function Versions({ open, title, setTitle }) {
                 title={
                   <div className="flex justify-between items-center w-full">
                     <Tag>{r.version.substring(0, 7)}</Tag>
-                    {database === DB.GENERIC ? (
+                    {database === DB.GENERIC || database === DB.SNOWFLAKE ? (
                       <Tooltip content={t("migration_not_supported_generic")}>
                         <Button
                           size="small"
@@ -299,7 +299,7 @@ export default function Versions({ open, title, setTitle }) {
                             e.stopPropagation();
                             setSelectedVersion(r.version);
                           }}
-                          disabled={database === DB.GENERIC}
+                          disabled
                         >
                           {t("generate_migration")}
                         </Button>
@@ -313,7 +313,6 @@ export default function Versions({ open, title, setTitle }) {
                           e.stopPropagation();
                           setSelectedVersion(r.version);
                         }}
-                        disabled={database === DB.GENERIC}
                       >
                         {t("generate_migration")}
                       </Button>
