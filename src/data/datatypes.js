@@ -1,4 +1,4 @@
-import { strHasQuotes } from "../utils/utils";
+import { strHasQuotes } from "../utils/utils.js";
 import {
   binaryColor,
   booleanColor,
@@ -12,8 +12,8 @@ import {
   otherColor,
   stringColor,
   vectorColor,
-} from "./constants";
-import { DB } from "./constants";
+} from "./constants.js";
+import { DB } from "./constants.js";
 
 const intRegex = /^-?\d*$/;
 const doubleRegex = /^-?\d*.?\d+$/;
@@ -2308,8 +2308,11 @@ const snowflakeTypesBase = {
       );
     },
     hasCheck: false,
-    isSized: false,
-    hasPrecision: true,
+    // drawDB's hasPrecision editor represents two-part numeric precision and
+    // scale (for example NUMBER(38,0)). Snowflake timestamps instead take one
+    // fractional-second precision, so use the existing single-size control.
+    isSized: true,
+    hasPrecision: false,
     defaultSize: 9,
     hasQuotes: true,
   },

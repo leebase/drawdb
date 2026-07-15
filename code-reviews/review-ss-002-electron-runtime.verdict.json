@@ -1,0 +1,82 @@
+{
+  "verdict": "fail",
+  "findings": [
+    {
+      "id": "SS002-001",
+      "severity": "High",
+      "file": "src/App.jsx",
+      "location": "lines 12-22",
+      "problem": "Electron loads dist-desktop/index.html through file:, but BrowserRouter treats the filesystem pathname as the application route and falls through to NotFound instead of opening the editor or a desktop start route.",
+      "proposed_fix": "Use a desktop-specific file-safe router or entry, such as a capability-gated HashRouter, while preserving BrowserRouter behavior for web, then add a built Electron launch assertion for the visible start route."
+    },
+    {
+      "id": "SS002-002",
+      "severity": "Medium",
+      "file": "src/electron/main.ts",
+      "location": "lines 13-25",
+      "problem": "The BrowserWindow has good process-isolation preferences but no navigation guard or window-open policy, while the shared renderer loads remote resources without a restrictive desktop Content Security Policy.",
+      "proposed_fix": "Apply a restrictive desktop CSP, prevent navigation away from application-owned local content, deny new Electron windows by default, and send explicitly allowlisted external URLs to the OS browser."
+    },
+    {
+      "id": "SS002-003",
+      "severity": "Medium",
+      "file": "artifacts/user-smoke/result.json",
+      "location": "lines 2-6",
+      "problem": "The result claims app startup and core-flow completion, but its console and manifest show that the harness only started the Vite web baseline and ran web unit tests; it provides no Electron launch evidence or screenshot.",
+      "proposed_fix": "Add an Electron-specific user smoke that launches built local assets without Vite, asserts the loaded application URL and visible editor or start route, and retains a screenshot or equivalent runtime diagnostics."
+    },
+    {
+      "id": "SS002-004",
+      "severity": "Medium",
+      "file": "tests/electron-runtime.test.mjs",
+      "location": "lines 20-75",
+      "problem": "The targeted tests use source-text regular expressions and never launch the built application, so they pass despite the invalid file-route startup and do not exercise navigation security.",
+      "proposed_fix": "Keep the fast scaffold checks, but add a built-runtime smoke that asserts the local application URL, rendered start route, lack of loopback dependency, and denied navigation and window creation."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Compiled scripts/check_web_smoke.py successfully; actual output: Compiling 'scripts/check_web_smoke.py'..."
+    }
+  ],
+  "lenses": {
+    "correctness": {
+      "finding_ids": [
+        "SS002-001"
+      ]
+    },
+    "web_build_preservation": {
+      "justification": "The ordinary web target built successfully in an isolated scratch output after transforming 2,648 modules, and the current web tests and lint passed; desktop renderer and Electron process scratch builds also completed successfully."
+    },
+    "secure_electron_defaults": {
+      "finding_ids": [
+        "SS002-002"
+      ],
+      "justification": "Context isolation, disabled Node integration, sandboxing, and the narrow frozen preload are positive, while navigation, new-window, and CSP controls remain incomplete."
+    },
+    "production_local_asset_loading": {
+      "finding_ids": [
+        "SS002-001"
+      ],
+      "justification": "loadFile and relative renderer asset URLs avoid a web server, but BrowserRouter maps the file pathname to the wildcard route."
+    },
+    "focused_scope": {
+      "justification": "The implementation is small, retains one shared renderer feature tree, and keeps web, desktop-renderer, and Electron process outputs distinct; no scope-expansion defect was found."
+    },
+    "targeted_tests": {
+      "finding_ids": [
+        "SS002-004"
+      ]
+    },
+    "user_smoke_evidence": {
+      "finding_ids": [
+        "SS002-003"
+      ]
+    },
+    "review_environment": {
+      "justification": "Usable Git worktree metadata and a review-worker tool were unavailable in this workspace snapshot. These are below-threshold environment notes; the High route defect is established directly by the loadFile target and BrowserRouter route table."
+    }
+  }
+}

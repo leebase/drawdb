@@ -74,10 +74,6 @@ import LayoutDropdown from "./LayoutDropdown";
 import Sidesheet from "./SideSheet/Sidesheet";
 import Modal from "./Modal/Modal";
 import ErdToolActions from "../ErdToolActions";
-import {
-  diagramToCanonicalProject,
-  renderCanonicalSnowflakeDDL,
-} from "../../erdTool/projectAdapter";
 import { useTranslation } from "react-i18next";
 import { exportSQL } from "../../utils/exportSQL";
 import { databases } from "../../data/databases";
@@ -94,6 +90,15 @@ import { deleteFromCache, STORAGE_KEY } from "../../utils/cache";
 import { useLiveQuery } from "dexie-react-hooks";
 import { DateTime } from "luxon";
 import ConfigureCustomTypes from "./ConfigureCustomTypes";
+import { openRoute } from "../../utils/openRoute";
+import {
+  exportDesktopSnowflakeDDL,
+  hasDesktopDdlExport,
+  hasDesktopProjectFiles,
+  requestDesktopProjectOpen,
+  requestDesktopProjectSave,
+  requestDesktopProjectSaveAs,
+} from "../../erdTool/desktopBridge";
 
 export default function ControlPanel({
   title,
@@ -101,6 +106,8 @@ export default function ControlPanel({
   lastSaved,
   setLastSaved,
   toolbarContainer,
+  isNativeDocument,
+  onNativeDocumentChange,
 }) {
   const { id: diagramId } = useParams();
 
@@ -112,15 +119,18 @@ export default function ControlPanel({
     data: null,
     filename: `${title}_${new Date().toISOString()}`,
     extension: "",
+    nativeDdl: false,
   });
 
   const openExportModal = (modalType) => {
     setExportData((prev) => ({
       ...prev,
       filename: `${title}_${new Date().toISOString()}`,
+      nativeDdl: false,
     }));
     setModal(modalType);
   };
+
   const [importFrom, setImportFrom] = useState(IMPORT_FROM.JSON);
   const { saveState, setSaveState } = useSaveState();
   const { layout, setLayout } = useLayout();
@@ -152,6 +162,30 @@ export default function ControlPanel({
   const isTemplate = useMatch("/editor/templates/:id");
   const navigate = useNavigateWithParams();
   const extensions = useExtensions();
+
+  const exportNativeSnowflakeDdl = async (data) => {
+    try {
+      const result = await exportDesktopSnowflakeDDL(
+        {
+          database,
+          title,
+          tables,
+          relationships,
+          references: relationships,
+          types,
+          enums,
+          transform,
+        },
+        data.data,
+        data.filename,
+      );
+      if (!result?.canceled) {
+        Toast.success("Snowflake DDL exported");
+      }
+    } catch (error) {
+      Toast.error(error?.message || "Failed to export Snowflake DDL");
+    }
+  };
 
   const undo = () => {
     if (undoStack.length === 0) return;
@@ -832,9 +866,13 @@ export default function ControlPanel({
     setLayout((prev) => ({ ...prev, dbmlEditor: !prev.dbmlEditor }));
   };
   const save = async () => {
+    if (isNativeDocument) {
+      requestDesktopProjectSave();
+      return;
+    }
     if (typeof extensions.cloudSave === "function") {
       // TODO: dont have blank here have null
-      const isNew = diagramId === 'blank';
+      const isNew = diagramId === "blank";
       const newId = isNew ? uuidv4() : diagramId;
       const diagramData = {
         diagramId: newId,
@@ -876,8 +914,20 @@ export default function ControlPanel({
     db.diagrams.orderBy("lastModified").reverse().limit(10).toArray(),
   );
 
-  const open = () => setModal(MODAL.OPEN);
-  const saveDiagramAs = () => setModal(MODAL.SAVEAS);
+  const open = () => {
+    if (hasDesktopProjectFiles()) {
+      requestDesktopProjectOpen();
+      return;
+    }
+    setModal(MODAL.OPEN);
+  };
+  const saveDiagramAs = () => {
+    if (isNativeDocument) {
+      requestDesktopProjectSaveAs();
+      return;
+    }
+    setModal(MODAL.SAVEAS);
+  };
 
   const saveAsCopy = async (newTitle) => {
     const newId = uuidv4();
@@ -957,7 +1007,7 @@ export default function ControlPanel({
         function: () => setModal(MODAL.NEW),
       },
       new_window: {
-        function: () => window.open("/editor", "_blank"),
+        function: () => openRoute("/editor"),
       },
       open: {
         function: open,
@@ -1023,7 +1073,7 @@ export default function ControlPanel({
         },
       },
       rename: {
-        function: () => {
+        function: async () => {
           setModal(MODAL.RENAME);
         },
         disabled: layout.readOnly,
@@ -1038,10 +1088,7 @@ export default function ControlPanel({
             if (typeof extensions.cloudDelete === "function") {
               await extensions.cloudDelete(diagramId);
             } else {
-              await db.diagrams
-                .where("diagramId")
-                .equals(diagramId)
-                .delete();
+              await db.diagrams.where("diagramId").equals(diagramId).delete();
             }
             setTitle("Untitled diagram");
             setTables([]);
@@ -1248,17 +1295,21 @@ export default function ControlPanel({
             },
           ],
         }),
-        function: () => {
+        function: async () => {
           if (database === DB.GENERIC) return;
           if (database === DB.SNOWFLAKE) {
             try {
-              const project = diagramToCanonicalProject({
+              const diagram = {
+                database,
                 title,
                 tables,
                 relationships,
+                references: relationships,
+                types,
+                enums,
                 transform,
-              });
-              const src = renderCanonicalSnowflakeDDL(project);
+              };
+              const src = exportSQL(diagram);
               if (!src || !String(src).trim()) {
                 throw new Error("Snowflake export produced empty DDL");
               }
@@ -1267,6 +1318,7 @@ export default function ControlPanel({
                 ...prev,
                 data: src,
                 extension: "sql",
+                nativeDdl: hasDesktopDdlExport(),
               }));
             } catch (error) {
               Toast.error(error?.message || "Failed to export Snowflake DDL");
@@ -1753,7 +1805,7 @@ export default function ControlPanel({
         function: () => window.open(socials.discord, "_blank"),
       },
       report_bug: {
-        function: () => window.open("/bug-report", "_blank"),
+        function: () => openRoute("/bug-report"),
       },
     },
   };
@@ -1800,7 +1852,12 @@ export default function ControlPanel({
             {header()}
             <div className="flex items-center gap-2 me-7">
               <Slot name="header-actions-start" />
-              <ErdToolActions title={title} setTitle={setTitle} />
+              <ErdToolActions
+                title={title}
+                setTitle={setTitle}
+                isNativeDocument={isNativeDocument}
+                onNativeDocumentChange={onNativeDocumentChange}
+              />
               {!isTemplate && (
                 <Button
                   type="primary"
@@ -1830,6 +1887,7 @@ export default function ControlPanel({
         importFrom={importFrom}
         importDb={importDb}
         saveAsCopy={saveAsCopy}
+        onNativeDdlExport={exportNativeSnowflakeDdl}
       />
       <Sidesheet
         type={sidesheet}
@@ -2034,6 +2092,8 @@ export default function ControlPanel({
         return t("failed_to_save");
       case State.FAILED_TO_LOAD:
         return t("failed_to_load");
+      case State.DIRTY:
+        return "Unsaved changes";
       default:
         return "";
     }
@@ -2080,8 +2140,10 @@ export default function ControlPanel({
                 }}
                 onClick={!layout.readOnly && (() => setModal(MODAL.RENAME))}
               >
-                <span>{(isTemplate ? "Templates" : "Diagrams")}</span>
-                <span className="select-none text-zinc-400 dark:text-zinc-500 mx-1">/</span>
+                <span>{isTemplate ? "Templates" : "Diagrams"}</span>
+                <span className="select-none text-zinc-400 dark:text-zinc-500 mx-1">
+                  /
+                </span>
                 <span>{title}</span>
                 {version && (
                   <Tag className="mt-1" color="blue" size="small">

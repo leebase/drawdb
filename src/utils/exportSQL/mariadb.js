@@ -3,10 +3,10 @@ import {
   parseDefault,
   uniqueConstraintClause,
   getFkColumnNames,
-} from "./shared";
+} from "./shared.js";
 
-import { dbToTypes } from "../../data/datatypes";
-import { DB } from "../../data/constants";
+import { dbToTypes } from "../../data/datatypes.js";
+import { DB } from "../../data/constants.js";
 
 function parseType(field) {
   let res = field.type;

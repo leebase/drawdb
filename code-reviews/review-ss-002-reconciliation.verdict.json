@@ -1,0 +1,46 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS002-REC-001",
+      "severity": "Medium",
+      "file": "src/electron/main.ts",
+      "location": "lines 43-49",
+      "problem": "The will-navigate guard permits every file:// destination rather than restricting navigation to the resolved application-owned renderer root, and the runtime test explicitly treats an unrelated /tmp file URL as allowed.",
+      "proposed_fix": "Resolve the renderer root once, normalize file URL paths, allow only the renderer entry and resources contained beneath that root, prevent unrelated local-file navigation, and add a negative runtime test for an unrelated file URL."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py scripts/start_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Passed; the real command output reported compilation of both requested smoke helper scripts."
+    }
+  ],
+  "lenses": {
+    "electron_shell_and_no_server_startup": {
+      "justification": "Electron loads the built desktop index directly with loadFile and the compiled-main harness observes no HTTP, HTTPS, net, or child-process startup dependency; the harness is deterministic but does not launch a genuine Chromium renderer."
+    },
+    "web_build_preservation": {
+      "justification": "The ordinary web build remains distinct in dist with root-relative assets and BrowserRouter behavior, while the desktop renderer uses relative assets and file-safe HashRouter behavior; the recorded npm verification and web smoke passed."
+    },
+    "main_preload_renderer_isolation": {
+      "finding_ids": [
+        "SS002-REC-001"
+      ],
+      "justification": "Context isolation, sandboxing, disabled Node integration, a narrow frozen preload, and denied unexpected web navigation establish a sound baseline, but arbitrary local-file navigation remains broader than the app-owned boundary."
+    },
+    "runtime_test_adequacy": {
+      "finding_ids": [
+        "SS002-REC-001"
+      ],
+      "justification": "The suite builds every output family and executes compiled main behavior, but it codifies the broad file-navigation exception and uses a mocked Electron runtime rather than asserting visible content in a real Electron window."
+    },
+    "user_smoke_evidence": {
+      "justification": "result.json records successful startup and core flow, check exit code 0, and no blocking errors; its Vite console log and manifest correctly scope it to web preservation rather than Electron-launch proof."
+    },
+    "scope_control": {
+      "justification": "The change is confined to the Electron scaffold, separate build outputs, and minimum file-safe routing support; later native IPC, Snowflake, credentials, packaging, and installer work remain out of scope."
+    }
+  }
+}

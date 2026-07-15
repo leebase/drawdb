@@ -1,0 +1,70 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS002-REV-001",
+      "severity": "Medium",
+      "file": "src/electron/main.ts",
+      "location": "lines 43-49",
+      "problem": "The will-navigate guard permits every file:// URL rather than limiting navigation to the application-owned renderer root, and the runtime test currently codifies that broad behavior.",
+      "proposed_fix": "Resolve the renderer root once, allow only the entry and files contained beneath that root, prevent unrelated local-file navigation, and add a negative test for an unrelated file URL."
+    },
+    {
+      "id": "SS002-REV-002",
+      "severity": "Medium",
+      "file": "index.html",
+      "location": "lines 39-50",
+      "problem": "The desktop renderer retains two remote icon stylesheet dependencies and has no restrictive Content Security Policy, weakening offline asset behavior and the planned renderer security boundary.",
+      "proposed_fix": "Bundle the required icon assets for the desktop target and apply a desktop-compatible restrictive CSP that permits only necessary local content and explicitly required network capabilities."
+    },
+    {
+      "id": "SS002-REV-003",
+      "severity": "Medium",
+      "file": "tests/electron-runtime.test.mjs",
+      "location": "lines 57-155 and 310-360",
+      "problem": "The suite executes compiled main against an Electron mock and validates built assets, but it never launches Electron/Chromium or proves that the editor renderer becomes visible; the supplied user smoke is explicitly a Vite web baseline.",
+      "proposed_fix": "Add an Electron smoke that launches the built runtime without Vite, waits for visible editor content, and records the loaded URL plus a screenshot or equivalent runtime diagnostic."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Passed. Real output: Compiling 'scripts/check_web_smoke.py'..."
+    }
+  ],
+  "lenses": {
+    "electron_launch_without_web_server": {
+      "finding_ids": [
+        "SS002-REV-003"
+      ],
+      "justification": "Main loads the built desktop index with loadFile and the compiled-main harness observes no server-related startup modules; real Electron/Chromium rendering remains unproven."
+    },
+    "file_runtime_routing_and_assets": {
+      "finding_ids": [
+        "SS002-REV-001",
+        "SS002-REV-002"
+      ],
+      "justification": "Hash routing and relative local build assets are correct, while arbitrary file navigation, remote icon styles, and the missing restrictive CSP remain."
+    },
+    "web_build_preservation": {
+      "justification": "Web and desktop renderer outputs remain distinct, normal web routing stays on BrowserRouter, and the supplied verified test and smoke evidence records a passing web baseline."
+    },
+    "main_preload_renderer_isolation": {
+      "finding_ids": [
+        "SS002-REV-001",
+        "SS002-REV-002"
+      ],
+      "justification": "Context isolation, sandboxing, disabled Node integration, a narrow frozen preload, and renderer import scanning provide sound process separation; navigation containment and CSP need hardening."
+    },
+    "test_adequacy": {
+      "finding_ids": [
+        "SS002-REV-003"
+      ],
+      "justification": "The suite builds all targets and executes compiled main in a deterministic harness, but it does not exercise a genuine Electron renderer."
+    },
+    "ss002_scope_control": {
+      "justification": "The file-safe hash routing is the minimum adaptation needed for SS-002 to open the editor without HTTP; no native file IPC, Snowflake, packaging, installer, or unrelated feature work was added."
+    }
+  }
+}

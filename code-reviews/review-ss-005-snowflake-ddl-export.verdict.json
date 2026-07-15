@@ -1,0 +1,61 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS005-001",
+      "severity": "Medium",
+      "file": "src/erdTool/projectAdapter.js",
+      "location": "lines 1676-1681 and 2037-2044; src/data/datatypes.js lines 2271-2300",
+      "problem": "Snowflake export copies drawDB field defaults verbatim and renders them directly after DEFAULT, even though drawDB's quote-bearing VARCHAR and DATE types accept bare editor values and existing exporters quote those values. Common defaults such as widget or 2026-07-15 therefore produce invalid or semantically different Snowflake SQL.",
+      "proposed_fix": "Normalize defaults while field type information is available: preserve recognized functions, keywords, numeric and Boolean literals, quote and apostrophe-escape string/date/timestamp literals according to Snowflake rules, and add tests for bare strings, apostrophes, dates, timestamps, NULL, and supported functions."
+    },
+    {
+      "id": "SS005-002",
+      "severity": "Low",
+      "file": "tests/test-snowflake-ddl-export.test.mjs",
+      "location": "lines 304-310",
+      "problem": "The new existing-target preservation regression asserts only SQLite, leaving MySQL, PostgreSQL, MariaDB, MSSQL, Oracle SQL, and the generic export choices without equivalent SS-005 regression assertions.",
+      "proposed_fix": "Use table-driven representative fixtures for every existing concrete export target and assert that the generic export submenu retains all established choices."
+    },
+    {
+      "id": "SS005-003",
+      "severity": "Low",
+      "file": "artifacts/user-smoke/result.json",
+      "location": "lines 1-7; artifacts/user-smoke/console.log lines 2-10",
+      "problem": "The successful smoke artifact starts a Vite web server and does not exercise the packaged offline Electron preview-to-native-save workflow; native behavior is evidenced by harness tests rather than a real UI smoke.",
+      "proposed_fix": "Add a final-tree packaged Electron smoke with network unavailable that verifies preview, filename editing, save-dialog cancellation, successful saved bytes, and visible write failures."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Completed successfully and printed: Compiling 'scripts/check_web_smoke.py'..."
+    }
+  ],
+  "lenses": {
+    "correctness_and_compatibility": {
+      "finding_ids": ["SS005-001"],
+      "justification": "Deterministic identifiers, supported types, ordering, informational constraints, deferred foreign keys, and RELY omission are preserved; default literal quoting remains incompatible with normal drawDB input conventions."
+    },
+    "offline_behavior": {
+      "finding_ids": ["SS005-003"],
+      "justification": "Production code uses bundled renderer logic and local native dialogs without a runtime server or network dependency, while supplied smoke evidence covers only the web baseline."
+    },
+    "security_boundaries": {
+      "justification": "The frozen preload offers one fixed save method; main restricts calls to the trusted main frame, validates exact payload shape, extension and size, owns path selection and atomic writes, and never executes the generated SQL."
+    },
+    "existing_database_target_preservation": {
+      "finding_ids": ["SS005-002"],
+      "justification": "Static inspection shows all existing concrete dispatcher cases and generic export choices remain present, but the new focused preservation test samples only SQLite."
+    },
+    "native_export_user_experience": {
+      "finding_ids": ["SS005-003"],
+      "justification": "Preview precedes saving, cancellation is a no-op, and errors use UI toasts; a packaged Electron UI smoke is still absent."
+    },
+    "test_and_artifact_evidence": {
+      "finding_ids": ["SS005-002", "SS005-003"],
+      "justification": "The supplied check log records 90 passing tests including focused renderer and IPC contracts, and result.json reports no blocking errors, but target breadth and native UI smoke evidence remain limited."
+    }
+  }
+}

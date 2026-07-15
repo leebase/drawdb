@@ -72,6 +72,7 @@ export const State = {
   LOADING: 3,
   ERROR: 4,
   FAILED_TO_LOAD: 5,
+  DIRTY: 6,
 };
 
 export const MODAL = {

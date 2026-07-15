@@ -37,6 +37,7 @@ import { isRtl } from "../i18n/utils/rtl";
 import { useMatch, useParams, useSearchParams } from "react-router-dom";
 import { get, SHARE_FILENAME } from "../api/gists";
 import { mergeCustomTypes } from "../utils/customTypes";
+import { requestDesktopProjectSave } from "../erdTool/desktopBridge";
 
 export const IdContext = createContext({
   gistId: "",
@@ -73,7 +74,8 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
   const [selectedDb, setSelectedDb] = useState("");
 
   const [diagramSource, setDiagramSource] = useState(null);
-  const [dismissedMoveIds, setDismissedMoveIds] = useState(readDismissedMoveIds);
+  const [dismissedMoveIds, setDismissedMoveIds] =
+    useState(readDismissedMoveIds);
   const pendingNewIdRef = useRef(null);
   const loadedIdRef = useRef(null);
   const { layout, setLayout } = useLayout();
@@ -143,6 +145,10 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
   );
 
   const save = useCallback(async () => {
+    if (diagramSource === "native") {
+      requestDesktopProjectSave();
+      return;
+    }
     if (searchParams.has("shareId")) {
       searchParams.delete("shareId");
       setSearchParams(searchParams, { replace: true });
@@ -466,6 +472,10 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
   };
 
   useEffect(() => {
+    if (diagramSource === "native") {
+      if (saveState === State.SAVING) setSaveState(State.DIRTY);
+      return;
+    }
     if (
       tables?.length === 0 &&
       areas?.length === 0 &&
@@ -490,15 +500,17 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     title,
     gistId,
     setSaveState,
+    diagramSource,
+    saveState,
   ]);
 
   useEffect(() => {
     if (layout.readOnly) return;
 
-    if (saveState !== State.SAVING) return;
+    if (saveState !== State.SAVING || diagramSource === "native") return;
 
     save();
-  }, [saveState, layout, save]);
+  }, [saveState, layout, save, diagramSource]);
 
   useEffect(() => {
     document.title = "Editor | drawDB";
@@ -515,6 +527,12 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
           lastSaved={lastSaved}
           setLastSaved={setLastSaved}
           toolbarContainer={toolbarContainer}
+          isNativeDocument={diagramSource === "native"}
+          onNativeDocumentChange={() => {
+            pendingNewIdRef.current = null;
+            setDiagramSource("native");
+            setSaveState(State.SAVED);
+          }}
         />
       </IdContext.Provider>
       <div
@@ -560,8 +578,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
               </Button>
             </div>
           )}
-          {(cloudOnly ||
-            typeof extensions.moveToCloudUpgrade === "function") &&
+          {(cloudOnly || typeof extensions.moveToCloudUpgrade === "function") &&
             diagramSource === "local" &&
             !version &&
             !dismissedMoveIds.has(loadedDiagramId) && (

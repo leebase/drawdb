@@ -1,10 +1,14 @@
-import { DB } from "../../data/constants";
-import { toMariaDB } from "./mariadb";
-import { toMSSQL } from "./mssql";
-import { toMySQL } from "./mysql";
-import { toOracleSQL } from "./oraclesql";
-import { toPostgres } from "./postgres";
-import { toSqlite } from "./sqlite";
+import { DB } from "../../data/constants.js";
+import { toMariaDB } from "./mariadb.js";
+import { toMSSQL } from "./mssql.js";
+import { toMySQL } from "./mysql.js";
+import { toOracleSQL } from "./oraclesql.js";
+import { toPostgres } from "./postgres.js";
+import { toSqlite } from "./sqlite.js";
+import {
+  diagramToCanonicalProject,
+  renderCanonicalSnowflakeDDL,
+} from "../../erdTool/projectAdapter.js";
 
 export function exportSQL(diagram) {
   switch (diagram.database) {
@@ -20,6 +24,8 @@ export function exportSQL(diagram) {
       return toMSSQL(diagram);
     case DB.ORACLESQL:
       return toOracleSQL(diagram);
+    case DB.SNOWFLAKE:
+      return renderCanonicalSnowflakeDDL(diagramToCanonicalProject(diagram));
     default:
       return "";
   }

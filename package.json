@@ -3,13 +3,20 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "main": "dist-electron/main.cjs",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "build:desktop-renderer": "vite build --base ./ --outDir dist-desktop",
+    "build:electron": "vite build --config vite.electron.config.js",
+    "build:desktop": "npm run build:desktop-renderer && npm run build:electron",
+    "start:electron": "npm run build:desktop && electron .",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "test": "node --test src/erdTool/projectAdapter.test.js src/erdTool/elkLayout.test.js",
-    "test:browser": "node --test src/erdTool/browserFlow.test.js"
+    "test": "node --test src/erdTool/projectAdapter.test.js src/erdTool/elkLayout.test.js tests/electron-runtime.test.mjs tests/test-snowflake-ddl-export.test.mjs",
+    "test:browser": "node --test src/erdTool/browserFlow.test.js",
+    "test:electron": "node --test tests/electron-runtime.test.mjs",
+    "verify:ss002": "npm run test && npm run lint && npm run build && npm run build:desktop"
   },
   "dependencies": {
     "@dbml/core": "^3.13.9",
@@ -52,6 +59,7 @@
     "@types/react": "^18.2.43",
     "@types/react-dom": "^18.2.17",
     "@vitejs/plugin-react": "^6.0.3",
+    "electron": "40.10.2",
     "eslint": "^8.55.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-react": "^7.33.2",

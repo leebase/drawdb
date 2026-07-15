@@ -1,0 +1,46 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS005-DEFAULT-FN-PREFIX",
+      "severity": "Medium",
+      "file": "src/erdTool/projectAdapter.js",
+      "location": "lines 313-317",
+      "problem": "isRecognizedSnowflakeDefaultFunction only checks for an allowlisted function name followed by an opening parenthesis at the start of the default. Values such as CURRENT_TIMESTAMP() trailing text or UUID_STRING()); bad_sql satisfy the prefix check and are emitted unquoted, even though they are ambiguous or malformed rather than deterministic recognized default literals.",
+      "proposed_fix": "Require the recognized-function branch to match the full default expression shape, for example by anchoring a single allowlisted function call with optional surrounding whitespace and rejecting trailing tokens, then add regression cases for recognized-function prefixes with extra text and malformed closing syntax."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Compiled scripts/check_web_smoke.py successfully with no Python syntax error."
+    }
+  ],
+  "lenses": {
+    "snowflake_default_literals": {
+      "finding_ids": [
+        "SS005-DEFAULT-FN-PREFIX"
+      ],
+      "justification": "Recognized keywords, numeric literals, Boolean literals, and fixture-covered functions remain unquoted; ordinary strings, date strings, timestamp strings, and embedded single quotes are quoted and escaped in the focused regression. The function-prefix ambiguity remains a Medium defect."
+    },
+    "ambiguous_values": {
+      "finding_ids": [
+        "SS005-DEFAULT-FN-PREFIX"
+      ],
+      "justification": "Ambiguous non-matching function, Boolean-looking, and malformed-number values covered by the fixture are quoted deterministically, but allowlisted function prefixes with trailing tokens are still accepted as raw defaults."
+    },
+    "drawdb_behavior_preservation": {
+      "justification": "The export still flows through drawDB's exportSQL dispatcher, empty defaults still normalize to no DEFAULT clause, and the focused Snowflake Node test passed during supplemental inspection."
+    },
+    "regression_coverage": {
+      "finding_ids": [
+        "SS005-DEFAULT-FN-PREFIX"
+      ],
+      "justification": "Coverage is meaningful across numeric, Boolean, keyword, function, string, date, timestamp, escaping, and several ambiguous cases, but it lacks a regression for allowlisted function names followed by extra or malformed tokens."
+    },
+    "review_environment": {
+      "justification": "The workspace path did not expose usable Git repository metadata, which limited diff-based attribution but did not prevent source inspection or the required compileall check."
+    }
+  }
+}

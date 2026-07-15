@@ -1,0 +1,79 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS004-001",
+      "severity": "Medium",
+      "file": "src/electron/main.ts",
+      "location": "lines 44-49 and 184-187",
+      "problem": "The 25 MB project limit is checked only after readFileSync has allocated and decoded the entire selected file, so an oversized local file can stall or exhaust the Electron main process before it is rejected.",
+      "proposed_fix": "Open the selected file descriptor, check its size before allocation, perform a bounded read that also detects growth beyond the limit, and test that oversized input is rejected without an unbounded read."
+    },
+    {
+      "id": "SS004-002",
+      "severity": "Medium",
+      "file": "src/erdTool/projectAdapter.js",
+      "location": "lines 425-448, 499-613, and 1335-1362",
+      "problem": "The authoritative drawdb_document validator does not enforce unique IDs for several collections and does not resolve relationship field pairs, index fields, or unique-constraint fields against their endpoint or owning tables, allowing duplicate identities or dangling references into editor state.",
+      "proposed_fix": "Add versioned collection-wide ID uniqueness and table/field reference-integrity checks for every authoritative drawDB entity and nested endpoint, with malformed native-file fixtures."
+    },
+    {
+      "id": "SS004-003",
+      "severity": "Low",
+      "file": "src/components/ErdToolActions.jsx",
+      "location": "lines 201-219; src/electron/main.ts lines 184-190",
+      "problem": "A failed Open unconditionally clears the renderer's known-path flag even though main changes currentProjectPath only after a successful read and validation, so an already-open native project unnecessarily falls back to Save As after the failed attempt.",
+      "proposed_fix": "Preserve the prior renderer path state on main-reported open failures, or return explicit path-ownership state from main and synchronize the renderer from it."
+    },
+    {
+      "id": "SS004-004",
+      "severity": "Low",
+      "file": "artifacts/user-smoke/result.json",
+      "location": "result.json, check.log, and console.log; tests/electron-runtime.test.mjs SS-004 suite",
+      "problem": "The supplied successful smoke uses Vite and predates the final renderer and Electron-test edits; current Electron UI integration is demonstrated mainly through a mocked main/preload harness and source-pattern assertions rather than a real final-tree Electron workflow.",
+      "proposed_fix": "Add a packaged Electron UI smoke on the final tree covering New/Open/Save/Save As, cancellation and failures, edit/dirty state, restart, and byte-verified offline reopen."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Completed successfully and printed: Compiling 'scripts/check_web_smoke.py'..."
+    }
+  ],
+  "lenses": {
+    "native_open_save_correctness": {
+      "finding_ids": ["SS004-001", "SS004-003"],
+      "justification": "Successful native writes attach the document to its main-owned path and established Open uses the native bridge; remaining issues concern pre-read size enforcement and state after a failed Open."
+    },
+    "context_isolation": {
+      "justification": "BrowserWindow enables context isolation, disables Node integration, enables sandboxing and web security, and project IPC accepts only the registered trusted main frame."
+    },
+    "preload_api_narrowness": {
+      "justification": "Preload exposes a frozen versioned object containing only fixed open, save, and saveAs methods, without a generic invoke, listener, Electron object, or filesystem primitive."
+    },
+    "filesystem_and_dialog_ownership": {
+      "finding_ids": ["SS004-001"],
+      "justification": "Main owns dialogs, selected paths, reads, atomic replacement writes, and recent metadata; the file-size limit should be enforced before main allocates selected file contents."
+    },
+    "project_serialization_compatibility": {
+      "finding_ids": ["SS004-002"],
+      "justification": "Canonical v1 including layout-less legacy files remains supported and the drawDB DTO preserves all declared targets, but manually authored authoritative DTOs lack some identity and reference-integrity validation."
+    },
+    "credential_exclusion": {
+      "justification": "Exact schemas, canonical physical-model restrictions, normalized persistence, duplicate-key normalization, and sensitive-key rejection exclude reviewed credential structures while legitimate credential-like identifiers round-trip."
+    },
+    "cancellation_and_error_behavior": {
+      "finding_ids": ["SS004-003"],
+      "justification": "Cancellation is an explicit no-op and renderer save state is restored; errors are sanitized, with only a low-severity known-path inconsistency remaining after failed Open."
+    },
+    "offline_reopen_behavior": {
+      "finding_ids": ["SS004-004"],
+      "justification": "The deterministic fresh-runtime harness reopens saved local bytes without server or network startup modules, but the supplied smoke does not drive a real Electron UI on the final tree."
+    },
+    "drawdb_functionality_preservation": {
+      "finding_ids": ["SS004-004"],
+      "justification": "The shared renderer, browser persistence fallback, supported database targets, exports, and auto-layout remain present; supplied web smoke passes, though final-tree Electron UI evidence is still limited."
+    }
+  }
+}

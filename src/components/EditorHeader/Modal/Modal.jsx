@@ -34,6 +34,7 @@ import Rename from "./Rename";
 import SetTableWidth from "./SetTableWidth";
 import Share from "./Share";
 import { mergeCustomTypes } from "../../../utils/customTypes";
+import { openRoute } from "../../../utils/openRoute";
 
 const extensionToLanguage = {
   md: "markdown",
@@ -52,6 +53,7 @@ export default function Modal({
   importDb,
   importFrom,
   saveAsCopy,
+  onNativeDdlExport,
 }) {
   const { t, i18n } = useTranslation();
   const { setTables, setRelationships, database } = useDiagram();
@@ -179,6 +181,10 @@ export default function Modal({
         );
         return;
       case MODAL.CODE: {
+        if (exportData.nativeDdl) {
+          await onNativeDdlExport(exportData);
+          return;
+        }
         const blob = new Blob([exportData.data], {
           type: "application/json",
         });
@@ -212,7 +218,7 @@ export default function Modal({
         setModal(MODAL.NONE);
         return;
       case MODAL.NEW:
-        window.open("/editor/templates/" + selectedTemplateId, "_blank");
+        openRoute("/editor/templates/" + selectedTemplateId);
         setModal(MODAL.NONE);
         return;
       case MODAL.LANGUAGE:
@@ -342,6 +348,7 @@ export default function Modal({
           data: "",
           extension: "",
           filename: `${title}_${new Date().toISOString()}`,
+          nativeDdl: false,
         }));
         setError({
           type: STATUS.NONE,

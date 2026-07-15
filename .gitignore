@@ -9,8 +9,12 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-desktop
+dist-electron
 dist-ssr
 *.local
+__pycache__/
+*.pyc
 
 # Editor directories and files
 .vscode/*

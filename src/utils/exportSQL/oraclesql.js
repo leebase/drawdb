@@ -1,9 +1,9 @@
-import { dbToTypes } from "../../data/datatypes";
+import { dbToTypes } from "../../data/datatypes.js";
 import {
   parseDefault,
   uniqueConstraintClause,
   getFkColumnNames,
-} from "./shared";
+} from "./shared.js";
 
 export function toOracleSQL(diagram) {
   return `${diagram.tables

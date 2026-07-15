@@ -1,0 +1,54 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS002-MED-001",
+      "severity": "Medium",
+      "file": "src/electron/main.ts",
+      "location": "lines 43-44",
+      "problem": "The Electron navigation guard allows any file:// URL to load in the app window. The project plan says main should resolve only application-owned assets, so a renderer navigation to an arbitrary local file is broader than the intended desktop shell boundary.",
+      "proposed_fix": "Resolve the allowed renderer root once, convert file URLs to paths, and allow only the packaged renderer entry and assets under that root. Prevent all other file:// navigations and update the runtime test to assert that an unrelated local file URL is blocked."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py scripts/start_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Passed; both smoke helper scripts compiled successfully."
+    },
+    {
+      "command": "npm run verify:ss002",
+      "exit_code": 0,
+      "summary": "Passed; ERD/unit/Electron runtime tests, lint, web build, and Electron runtime test completed successfully. Vite emitted eval and chunk-size warnings but exited 0."
+    }
+  ],
+  "lenses": {
+    "Electron shell behavior": {
+      "finding_ids": [
+        "SS002-MED-001"
+      ],
+      "justification": "The shell loads the desktop renderer through Electron loadFile, opens the editor route, isolates the renderer, and exposes only a minimal frozen preload API; navigation hardening remains broader than the app-owned-asset contract."
+    },
+    "No local web server operation": {
+      "justification": "The packaged-mode path loads dist-desktop/index.html directly and the runtime harness verifies no startup use of HTTP, HTTPS, net, or child-process modules."
+    },
+    "Preservation of web build": {
+      "justification": "npm run build passed and the web output remains in dist with root-relative assets, separate from the relative-asset desktop renderer output."
+    },
+    "Offline and routing coverage": {
+      "justification": "File-loaded Electron windows use HashRouter and start at /editor; browser URLs still use BrowserRouter. The user-smoke artifact records a successful baseline flow with no blocking errors."
+    },
+    "Build-output isolation": {
+      "justification": "dist, dist-desktop, and dist-electron are independently identifiable, and the Electron build emits only main.cjs and preload.cjs."
+    },
+    "Test quality": {
+      "finding_ids": [
+        "SS002-MED-001"
+      ],
+      "justification": "The test suite builds and executes the compiled main module in a harness, but some assertions are source-regex based and the current navigation test permits an arbitrary file URL."
+    },
+    "Unified acceptance evidence": {
+      "justification": "npm run verify:ss002 is reproducible and unified for SS-002 because it runs tests, lint, web build, and Electron runtime coverage from one command."
+    }
+  }
+}

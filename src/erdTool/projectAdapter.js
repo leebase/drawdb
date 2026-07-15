@@ -1,11 +1,35 @@
 const PROJECT_VERSION = "1";
 const MODEL_VERSION = "1";
 const SNOWFLAKE_IDENTIFIER_MAX_LENGTH = 255;
+const SENSITIVE_PROJECT_KEY =
+  /credential|password|passphrase|secret|token|connection|account|warehouse|role|session|api[_-]?key|private[_-]?key|access[_-]?key|auth(?:entication)?/i;
+const SUPPORTED_DRAWDB_DATABASES = new Set([
+  "mysql",
+  "postgresql",
+  "transactsql",
+  "sqlite",
+  "mariadb",
+  "oraclesql",
+  "snowflake",
+  "generic",
+]);
 
 const TOP_LEVEL_ALLOWED = new Set([
   "project_version",
   "physical_model",
   "diagram_layout",
+  "drawdb_document",
+]);
+const DRAWDB_DOCUMENT_KEYS = new Set([
+  "database",
+  "title",
+  "tables",
+  "relationships",
+  "notes",
+  "areas",
+  "types",
+  "enums",
+  "transform",
 ]);
 const PHYSICAL_MODEL_KEYS = new Set([
   "model_version",
@@ -60,6 +84,86 @@ const RELATIONSHIP_KEYS = new Set([
 const LAYOUT_KEYS = new Set(["nodes", "viewport"]);
 const VIEWPORT_KEYS = new Set(["x", "y", "zoom"]);
 const NODE_KEYS = new Set(["x", "y"]);
+const DRAWDB_TABLE_KEYS = new Set([
+  "id",
+  "name",
+  "x",
+  "y",
+  "fields",
+  "comment",
+  "locked",
+  "hidden",
+  "collapsed",
+  "indices",
+  "uniqueConstraints",
+  "color",
+  "inherits",
+  "namespace",
+  "constraintView",
+]);
+const DRAWDB_FIELD_KEYS = new Set([
+  "id",
+  "name",
+  "type",
+  "default",
+  "check",
+  "primary",
+  "unique",
+  "unsigned",
+  "notNull",
+  "increment",
+  "comment",
+  "size",
+  "values",
+  "isArray",
+]);
+const DRAWDB_INDEX_KEYS = new Set(["id", "name", "unique", "fields"]);
+const DRAWDB_UNIQUE_CONSTRAINT_KEYS = new Set(["id", "name", "fields"]);
+const DRAWDB_RELATIONSHIP_KEYS = new Set([
+  "id",
+  "name",
+  "startTableId",
+  "startFieldId",
+  "endTableId",
+  "endFieldId",
+  "fields",
+  "cardinality",
+  "updateConstraint",
+  "deleteConstraint",
+]);
+const DRAWDB_RELATIONSHIP_FIELD_KEYS = new Set(["startFieldId", "endFieldId"]);
+const DRAWDB_NOTE_KEYS = new Set([
+  "id",
+  "x",
+  "y",
+  "title",
+  "content",
+  "color",
+  "height",
+  "width",
+  "locked",
+]);
+const DRAWDB_AREA_KEYS = new Set([
+  "id",
+  "name",
+  "x",
+  "y",
+  "width",
+  "height",
+  "locked",
+  "color",
+]);
+const DRAWDB_TYPE_KEYS = new Set(["id", "name", "fields", "comment"]);
+const DRAWDB_TYPE_FIELD_KEYS = new Set([
+  "id",
+  "name",
+  "type",
+  "values",
+  "size",
+]);
+const DRAWDB_ENUM_KEYS = new Set(["id", "name", "values"]);
+const DRAWDB_NAMESPACE_KEYS = new Set(["id", "catalog", "schema"]);
+const DRAWDB_CONSTRAINT_VIEW_KEYS = new Set(["primaryKeyName", "uniqueNames"]);
 
 const FORBIDDEN_KEYS = new Set([
   "account",
@@ -99,6 +203,43 @@ const SUPPORTED_TYPE_FAMILIES = new Set([
 const FALLBACK_X_STEP = 280;
 const FALLBACK_Y = 80;
 const SNOWFLAKE_UNQUOTED_IDENT_RE = /^[A-Z_][A-Z0-9_$]*$/;
+const SNOWFLAKE_NUMERIC_LITERAL_RE =
+  /^[+-]?(?:(?:\d+(?:\.\d*)?)|(?:\.\d+))(?:[eE][+-]?\d+)?$/;
+const SNOWFLAKE_DEFAULT_KEYWORDS = new Set([
+  "CURRENT_DATE",
+  "CURRENT_ROLE",
+  "CURRENT_TIME",
+  "CURRENT_TIMESTAMP",
+  "CURRENT_USER",
+  "LOCALTIME",
+  "LOCALTIMESTAMP",
+  "NULL",
+]);
+const SNOWFLAKE_DEFAULT_FUNCTIONS = new Set([
+  "CURRENT_DATE",
+  "CURRENT_TIME",
+  "CURRENT_TIMESTAMP",
+  "DATE",
+  "DATEADD",
+  "GETDATE",
+  "LOCALTIME",
+  "LOCALTIMESTAMP",
+  "SEQ1",
+  "SEQ2",
+  "SEQ4",
+  "SEQ8",
+  "SYSDATE",
+  "SYSTIMESTAMP",
+  "TO_DATE",
+  "TO_TIME",
+  "TO_TIMESTAMP",
+  "TO_TIMESTAMP_NTZ",
+  "TRY_TO_DATE",
+  "TRY_TO_TIME",
+  "TRY_TO_TIMESTAMP",
+  "TRY_TO_TIMESTAMP_NTZ",
+  "UUID_STRING",
+]);
 
 function fail(message) {
   throw new Error(message);
@@ -165,6 +306,62 @@ function sqlStringLiteral(value) {
   return `'${String(value).replaceAll("'", "''")}'`;
 }
 
+function isSingleQuotedSqlLiteral(value) {
+  return /^'(?:[^']|'')*'$/.test(value);
+}
+
+function isRecognizedSnowflakeDefaultFunction(value) {
+  const text = String(value).trim();
+  const match = text.match(/^([A-Z_][A-Z0-9_$]*)\s*\(/i);
+  if (!match || !SNOWFLAKE_DEFAULT_FUNCTIONS.has(match[1].toUpperCase())) {
+    return false;
+  }
+
+  let depth = 0;
+  let inString = false;
+  for (let index = match[0].length - 1; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (char === "'" && text[index + 1] === "'") {
+        index += 1;
+      } else if (char === "'") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inString = true;
+    } else if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) {
+        return index === text.length - 1;
+      }
+      if (depth < 0) {
+        return false;
+      }
+    }
+  }
+  return false;
+}
+
+function snowflakeDefaultLiteral(value) {
+  const text = String(value).trim();
+  const upper = text.toUpperCase();
+  if (
+    isSingleQuotedSqlLiteral(text) ||
+    SNOWFLAKE_NUMERIC_LITERAL_RE.test(text) ||
+    upper === "TRUE" ||
+    upper === "FALSE" ||
+    SNOWFLAKE_DEFAULT_KEYWORDS.has(upper) ||
+    isRecognizedSnowflakeDefaultFunction(text)
+  ) {
+    return text;
+  }
+  return sqlStringLiteral(text);
+}
+
 function requireBoolean(value, label) {
   if (typeof value !== "boolean") {
     fail(`${label} must be a boolean`);
@@ -205,6 +402,307 @@ function requireExactKeys(obj, allowed, label) {
       fail(`${label} is missing required ${key}`);
     }
   }
+}
+
+function rejectUnexpectedKeys(obj, allowed, label) {
+  requireObject(obj, label);
+  for (const key of Object.keys(obj)) {
+    if (!allowed.has(key)) {
+      fail(`${label} has unexpected field ${key}`);
+    }
+  }
+}
+
+function requireEntityId(value, label) {
+  if (
+    (typeof value !== "string" || !value.trim()) &&
+    (typeof value !== "number" || !Number.isInteger(value))
+  ) {
+    fail(`${label} must be a nonblank string or integer`);
+  }
+  return value;
+}
+
+function validateOptional(value, validator, label) {
+  if (value !== undefined) validator(value, label);
+}
+
+function requireStringArray(value, label) {
+  return requireArray(value, label).map((item, index) =>
+    requireNonblankString(item, `${label}[${index}]`),
+  );
+}
+
+function requireIdArray(value, label) {
+  return requireArray(value, label).map((item, index) =>
+    requireEntityId(item, `${label}[${index}]`),
+  );
+}
+
+function validateDrawdbEntityKeys(document) {
+  const tableIds = new Set();
+  const fieldIdsByTable = new Map();
+  document.tables.forEach((table, tableIndex) => {
+    const tableLabel = `drawdb_document.tables[${tableIndex}]`;
+    rejectUnexpectedKeys(table, DRAWDB_TABLE_KEYS, tableLabel);
+    const tableId = requireEntityId(table.id, `${tableLabel}.id`);
+    if (tableIds.has(tableId)) fail(`${tableLabel}.id must be unique`);
+    tableIds.add(tableId);
+    requireNonblankString(table.name, `${tableLabel}.name`);
+    requireFiniteNumber(table.x, `${tableLabel}.x`);
+    requireFiniteNumber(table.y, `${tableLabel}.y`);
+    validateOptional(
+      table.comment,
+      requireOptionalString,
+      `${tableLabel}.comment`,
+    );
+    for (const flag of ["locked", "hidden", "collapsed"]) {
+      validateOptional(table[flag], requireBoolean, `${tableLabel}.${flag}`);
+    }
+    validateOptional(table.color, requireNonblankString, `${tableLabel}.color`);
+    if (table.inherits !== undefined) {
+      requireIdArray(table.inherits, `${tableLabel}.inherits`);
+    }
+    const fieldIds = new Set();
+    requireArray(table.fields, `${tableLabel}.fields`).forEach(
+      (field, fieldIndex) => {
+        const fieldLabel = `${tableLabel}.fields[${fieldIndex}]`;
+        rejectUnexpectedKeys(field, DRAWDB_FIELD_KEYS, fieldLabel);
+        const fieldId = requireEntityId(field.id, `${fieldLabel}.id`);
+        if (fieldIds.has(fieldId)) fail(`${fieldLabel}.id must be unique`);
+        fieldIds.add(fieldId);
+        requireNonblankString(field.name, `${fieldLabel}.name`);
+        requireNonblankString(field.type, `${fieldLabel}.type`);
+        for (const flag of [
+          "primary",
+          "unique",
+          "unsigned",
+          "notNull",
+          "increment",
+          "isArray",
+        ]) {
+          validateOptional(
+            field[flag],
+            requireBoolean,
+            `${fieldLabel}.${flag}`,
+          );
+        }
+        for (const key of ["check", "comment"]) {
+          validateOptional(
+            field[key],
+            requireOptionalString,
+            `${fieldLabel}.${key}`,
+          );
+        }
+        if (field.values !== undefined) {
+          requireStringArray(field.values, `${fieldLabel}.values`);
+        }
+        if (
+          field.default !== undefined &&
+          field.default !== null &&
+          !["string", "number", "boolean"].includes(typeof field.default)
+        ) {
+          fail(`${fieldLabel}.default must be a scalar or null`);
+        }
+        if (
+          field.size !== undefined &&
+          field.size !== null &&
+          typeof field.size !== "string" &&
+          !Number.isFinite(field.size)
+        ) {
+          fail(`${fieldLabel}.size must be a string, finite number, or null`);
+        }
+      },
+    );
+    fieldIdsByTable.set(tableId, fieldIds);
+    requireArray(table.indices ?? [], `${tableLabel}.indices`).forEach(
+      (index, indexPosition) => {
+        const indexLabel = `${tableLabel}.indices[${indexPosition}]`;
+        rejectUnexpectedKeys(index, DRAWDB_INDEX_KEYS, indexLabel);
+        validateOptional(index.id, requireEntityId, `${indexLabel}.id`);
+        requireNonblankString(index.name, `${indexLabel}.name`);
+        requireBoolean(index.unique, `${indexLabel}.unique`);
+        requireIdArray(index.fields, `${indexLabel}.fields`);
+      },
+    );
+    requireArray(
+      table.uniqueConstraints ?? [],
+      `${tableLabel}.uniqueConstraints`,
+    ).forEach((constraint, constraintIndex) => {
+      const constraintLabel = `${tableLabel}.uniqueConstraints[${constraintIndex}]`;
+      rejectUnexpectedKeys(
+        constraint,
+        DRAWDB_UNIQUE_CONSTRAINT_KEYS,
+        constraintLabel,
+      );
+      validateOptional(constraint.id, requireEntityId, `${constraintLabel}.id`);
+      requireNonblankString(constraint.name, `${constraintLabel}.name`);
+      requireIdArray(constraint.fields, `${constraintLabel}.fields`);
+    });
+    if (table.namespace !== undefined) {
+      rejectUnexpectedKeys(
+        table.namespace,
+        DRAWDB_NAMESPACE_KEYS,
+        `${tableLabel}.namespace`,
+      );
+      requireEntityId(table.namespace.id, `${tableLabel}.namespace.id`);
+      requireNonblankString(
+        table.namespace.catalog,
+        `${tableLabel}.namespace.catalog`,
+      );
+      requireNonblankString(
+        table.namespace.schema,
+        `${tableLabel}.namespace.schema`,
+      );
+    }
+    if (table.constraintView !== undefined) {
+      rejectUnexpectedKeys(
+        table.constraintView,
+        DRAWDB_CONSTRAINT_VIEW_KEYS,
+        `${tableLabel}.constraintView`,
+      );
+      if (
+        table.constraintView.uniqueNames !== undefined &&
+        !isPlainObject(table.constraintView.uniqueNames)
+      ) {
+        fail(`${tableLabel}.constraintView.uniqueNames must be an object`);
+      }
+      validateOptional(
+        table.constraintView.primaryKeyName,
+        requireNonblankString,
+        `${tableLabel}.constraintView.primaryKeyName`,
+      );
+      if (table.constraintView.uniqueNames !== undefined) {
+        for (const [identifier, name] of Object.entries(
+          table.constraintView.uniqueNames,
+        )) {
+          requireNonblankString(
+            identifier,
+            `${tableLabel}.constraintView.uniqueNames key`,
+          );
+          requireNonblankString(
+            name,
+            `${tableLabel}.constraintView.uniqueNames.${identifier}`,
+          );
+        }
+      }
+    }
+  });
+
+  document.relationships.forEach((relationship, relationshipIndex) => {
+    const relationshipLabel = `drawdb_document.relationships[${relationshipIndex}]`;
+    rejectUnexpectedKeys(
+      relationship,
+      DRAWDB_RELATIONSHIP_KEYS,
+      relationshipLabel,
+    );
+    requireEntityId(relationship.id, `${relationshipLabel}.id`);
+    validateOptional(
+      relationship.name,
+      requireOptionalString,
+      `${relationshipLabel}.name`,
+    );
+    const startTableId = requireEntityId(
+      relationship.startTableId,
+      `${relationshipLabel}.startTableId`,
+    );
+    const endTableId = requireEntityId(
+      relationship.endTableId,
+      `${relationshipLabel}.endTableId`,
+    );
+    const startFieldId = requireEntityId(
+      relationship.startFieldId,
+      `${relationshipLabel}.startFieldId`,
+    );
+    const endFieldId = requireEntityId(
+      relationship.endFieldId,
+      `${relationshipLabel}.endFieldId`,
+    );
+    if (!tableIds.has(startTableId) || !tableIds.has(endTableId)) {
+      fail(`${relationshipLabel} references an unknown table`);
+    }
+    if (
+      !fieldIdsByTable.get(startTableId)?.has(startFieldId) ||
+      !fieldIdsByTable.get(endTableId)?.has(endFieldId)
+    ) {
+      fail(`${relationshipLabel} references an unknown field`);
+    }
+    requireNonblankString(
+      relationship.cardinality,
+      `${relationshipLabel}.cardinality`,
+    );
+    requireNonblankString(
+      relationship.updateConstraint,
+      `${relationshipLabel}.updateConstraint`,
+    );
+    requireNonblankString(
+      relationship.deleteConstraint,
+      `${relationshipLabel}.deleteConstraint`,
+    );
+    requireArray(
+      relationship.fields ?? [],
+      `${relationshipLabel}.fields`,
+    ).forEach((field, fieldIndex) => {
+      const fieldLabel = `${relationshipLabel}.fields[${fieldIndex}]`;
+      rejectUnexpectedKeys(field, DRAWDB_RELATIONSHIP_FIELD_KEYS, fieldLabel);
+      requireEntityId(field.startFieldId, `${fieldLabel}.startFieldId`);
+      requireEntityId(field.endFieldId, `${fieldLabel}.endFieldId`);
+    });
+  });
+
+  document.notes.forEach((note, index) => {
+    const label = `drawdb_document.notes[${index}]`;
+    rejectUnexpectedKeys(note, DRAWDB_NOTE_KEYS, label);
+    requireEntityId(note.id, `${label}.id`);
+    requireFiniteNumber(note.x, `${label}.x`);
+    requireFiniteNumber(note.y, `${label}.y`);
+    requireNonblankString(note.title, `${label}.title`);
+    if (typeof note.content !== "string")
+      fail(`${label}.content must be a string`);
+    for (const key of ["height", "width"])
+      validateOptional(note[key], requireFiniteNumber, `${label}.${key}`);
+    validateOptional(note.color, requireNonblankString, `${label}.color`);
+    validateOptional(note.locked, requireBoolean, `${label}.locked`);
+  });
+  document.areas.forEach((area, index) => {
+    const label = `drawdb_document.areas[${index}]`;
+    rejectUnexpectedKeys(area, DRAWDB_AREA_KEYS, label);
+    requireEntityId(area.id, `${label}.id`);
+    requireNonblankString(area.name, `${label}.name`);
+    for (const key of ["x", "y", "width", "height"])
+      requireFiniteNumber(area[key], `${label}.${key}`);
+    validateOptional(area.locked, requireBoolean, `${label}.locked`);
+    validateOptional(area.color, requireNonblankString, `${label}.color`);
+  });
+  document.types.forEach((type, typeIndex) => {
+    const typeLabel = `drawdb_document.types[${typeIndex}]`;
+    rejectUnexpectedKeys(type, DRAWDB_TYPE_KEYS, typeLabel);
+    validateOptional(type.id, requireEntityId, `${typeLabel}.id`);
+    requireNonblankString(type.name, `${typeLabel}.name`);
+    validateOptional(
+      type.comment,
+      requireOptionalString,
+      `${typeLabel}.comment`,
+    );
+    requireArray(type.fields, `${typeLabel}.fields`).forEach(
+      (field, fieldIndex) => {
+        const fieldLabel = `${typeLabel}.fields[${fieldIndex}]`;
+        rejectUnexpectedKeys(field, DRAWDB_TYPE_FIELD_KEYS, fieldLabel);
+        validateOptional(field.id, requireEntityId, `${fieldLabel}.id`);
+        requireNonblankString(field.name, `${fieldLabel}.name`);
+        requireNonblankString(field.type, `${fieldLabel}.type`);
+        if (field.values !== undefined)
+          requireStringArray(field.values, `${fieldLabel}.values`);
+      },
+    );
+  });
+  document.enums.forEach((enumValue, index) => {
+    const label = `drawdb_document.enums[${index}]`;
+    rejectUnexpectedKeys(enumValue, DRAWDB_ENUM_KEYS, label);
+    validateOptional(enumValue.id, requireEntityId, `${label}.id`);
+    requireNonblankString(enumValue.name, `${label}.name`);
+    requireStringArray(enumValue.values, `${label}.values`);
+  });
 }
 
 function assertNoForbiddenKeys(value, path = "value") {
@@ -248,7 +746,9 @@ export function toSnowflakeIdentifier(value, label = "identifier") {
     normalized = `_${normalized}`;
   }
   if (!normalized) {
-    fail(`${label} normalizes to an empty identifier: ${JSON.stringify(value)}`);
+    fail(
+      `${label} normalizes to an empty identifier: ${JSON.stringify(value)}`,
+    );
   }
   if (normalized.length > SNOWFLAKE_IDENTIFIER_MAX_LENGTH) {
     fail(
@@ -295,9 +795,7 @@ function assertTypeBounds(family, { precision, scale, length }, label) {
     }
     const maxScale = Math.min(37, precision);
     if (scale < 0 || scale > maxScale) {
-      fail(
-        `${label}: scale must be between 0 and ${maxScale} for NUMBER`,
-      );
+      fail(`${label}: scale must be between 0 and ${maxScale} for NUMBER`);
     }
   } else if (family === "VARCHAR") {
     if (length === null) {
@@ -331,9 +829,7 @@ function assertTypeBounds(family, { precision, scale, length }, label) {
     }
   } else if (family === "DATE" || family === "BOOLEAN" || family === "FLOAT") {
     if (precision !== null || scale !== null || length !== null) {
-      fail(
-        `${label}: precision, scale, and length must be null for ${family}`,
-      );
+      fail(`${label}: precision, scale, and length must be null for ${family}`);
     }
   }
 }
@@ -341,11 +837,17 @@ function assertTypeBounds(family, { precision, scale, length }, label) {
 function validateDataType(dataType, label) {
   requireObject(dataType, label);
   requireExactKeys(dataType, DATA_TYPE_KEYS, label);
-  const family = requireNonblankString(dataType.family, `${label}.family`).toUpperCase();
+  const family = requireNonblankString(
+    dataType.family,
+    `${label}.family`,
+  ).toUpperCase();
   if (!SUPPORTED_TYPE_FAMILIES.has(family)) {
     fail(`unsupported type family ${family}`);
   }
-  const precision = requireOptionalInt(dataType.precision, `${label}.precision`);
+  const precision = requireOptionalInt(
+    dataType.precision,
+    `${label}.precision`,
+  );
   const scale = requireOptionalInt(dataType.scale, `${label}.scale`);
   const length = requireOptionalInt(dataType.length, `${label}.length`);
   assertTypeBounds(family, { precision, scale, length }, label);
@@ -385,9 +887,16 @@ function dataTypeFromField(field) {
     if (size === undefined || size === null || size === "") {
       fail(`NUMBER field ${field.name} requires size`);
     }
-    const parts = String(size).split(",").map((part) => part.trim());
-    if (parts.length !== 2 || parts.some((part) => part === "" || Number.isNaN(Number(part)))) {
-      fail(`NUMBER field ${field.name} has malformed size ${JSON.stringify(size)}`);
+    const parts = String(size)
+      .split(",")
+      .map((part) => part.trim());
+    if (
+      parts.length !== 2 ||
+      parts.some((part) => part === "" || Number.isNaN(Number(part)))
+    ) {
+      fail(
+        `NUMBER field ${field.name} has malformed size ${JSON.stringify(size)}`,
+      );
     }
     precision = Number(parts[0]);
     scale = Number(parts[1]);
@@ -463,7 +972,9 @@ function parseDiagramLayout(diagramLayout, tableIds) {
   const nodes = {};
   for (const [nodeId, position] of Object.entries(diagramLayout.nodes)) {
     if (!tableIds.has(nodeId)) {
-      fail(`diagram_layout references unknown table id ${JSON.stringify(nodeId)}`);
+      fail(
+        `diagram_layout references unknown table id ${JSON.stringify(nodeId)}`,
+      );
     }
     requireObject(position, "node");
     requireExactKeys(position, NODE_KEYS, "node");
@@ -488,25 +999,121 @@ function parseDiagramLayout(diagramLayout, tableIds) {
   };
 }
 
+function validateDrawdbDocument(document) {
+  requireObject(document, "drawdb_document");
+  requireExactKeys(document, DRAWDB_DOCUMENT_KEYS, "drawdb_document");
+  const database = requireNonblankString(
+    document.database,
+    "drawdb_document.database",
+  );
+  if (!SUPPORTED_DRAWDB_DATABASES.has(database)) {
+    fail(
+      `drawdb_document.database is unsupported: ${JSON.stringify(database)}`,
+    );
+  }
+  const title = requireNonblankString(document.title, "drawdb_document.title");
+  const tables = requireArray(document.tables, "drawdb_document.tables");
+  const relationships = requireArray(
+    document.relationships,
+    "drawdb_document.relationships",
+  );
+  const notes = requireArray(document.notes, "drawdb_document.notes");
+  const areas = requireArray(document.areas, "drawdb_document.areas");
+  const types = requireArray(document.types, "drawdb_document.types");
+  const enums = requireArray(document.enums, "drawdb_document.enums");
+  validateDrawdbEntityKeys(document);
+  requireObject(document.transform, "drawdb_document.transform");
+  requireExactKeys(
+    document.transform,
+    new Set(["pan", "zoom"]),
+    "drawdb_document.transform",
+  );
+  requireObject(document.transform.pan, "drawdb_document.transform.pan");
+  requireExactKeys(
+    document.transform.pan,
+    new Set(["x", "y"]),
+    "drawdb_document.transform.pan",
+  );
+  const transform = {
+    pan: {
+      x: requireFiniteNumber(
+        document.transform.pan.x,
+        "drawdb_document.transform.pan.x",
+      ),
+      y: requireFiniteNumber(
+        document.transform.pan.y,
+        "drawdb_document.transform.pan.y",
+      ),
+    },
+    zoom: requireFiniteNumber(
+      document.transform.zoom,
+      "drawdb_document.transform.zoom",
+    ),
+  };
+  if (transform.zoom <= 0)
+    fail("drawdb_document.transform.zoom must be positive");
+
+  const assertNoSensitiveKeys = (value, path = "drawdb_document") => {
+    if (Array.isArray(value)) {
+      value.forEach((item, index) =>
+        assertNoSensitiveKeys(item, `${path}[${index}]`),
+      );
+      return;
+    }
+    if (!isPlainObject(value)) return;
+    const identifierMap = path.endsWith(".constraintView.uniqueNames");
+    for (const [key, child] of Object.entries(value)) {
+      if (!identifierMap && SENSITIVE_PROJECT_KEY.test(key)) {
+        fail(`credential-like field ${key} is not allowed at ${path}`);
+      }
+      assertNoSensitiveKeys(child, `${path}.${key}`);
+    }
+  };
+  assertNoSensitiveKeys(document);
+
+  // Clone the allowlisted editor DTO so the native project owns plain JSON data
+  // and cannot retain renderer object references.
+  return JSON.parse(
+    JSON.stringify({
+      database,
+      title,
+      tables,
+      relationships,
+      notes,
+      areas,
+      types,
+      enums,
+      transform,
+    }),
+  );
+}
+
 function validatePhysicalModel(model) {
   requireObject(model, "physical_model");
   requireExactKeys(model, PHYSICAL_MODEL_KEYS, "physical model");
   assertNoForbiddenKeys(model, "physical_model");
 
-  const modelVersion = requireNonblankString(model.model_version, "model_version");
+  const modelVersion = requireNonblankString(
+    model.model_version,
+    "model_version",
+  );
   if (modelVersion !== MODEL_VERSION) {
-    fail(`Unsupported model_version ${JSON.stringify(modelVersion)}; expected "1"`);
+    fail(
+      `Unsupported model_version ${JSON.stringify(modelVersion)}; expected "1"`,
+    );
   }
   const name = requireNonblankString(model.name, "name");
-  const namespaces = requireArray(model.namespaces, "namespaces").map((ns, index) => {
-    requireObject(ns, `namespaces[${index}]`);
-    requireExactKeys(ns, NAMESPACE_KEYS, "namespace");
-    return {
-      id: requireNonblankString(ns.id, "id"),
-      catalog: requireLegalSnowflakeIdentifier(ns.catalog, "catalog"),
-      schema: requireLegalSnowflakeIdentifier(ns.schema, "schema"),
-    };
-  });
+  const namespaces = requireArray(model.namespaces, "namespaces").map(
+    (ns, index) => {
+      requireObject(ns, `namespaces[${index}]`);
+      requireExactKeys(ns, NAMESPACE_KEYS, "namespace");
+      return {
+        id: requireNonblankString(ns.id, "id"),
+        catalog: requireLegalSnowflakeIdentifier(ns.catalog, "catalog"),
+        schema: requireLegalSnowflakeIdentifier(ns.schema, "schema"),
+      };
+    },
+  );
   const sortedNamespaces = sortById(namespaces);
   if (sortedNamespaces.some((ns, i) => ns.id !== namespaces[i].id)) {
     fail("namespaces must be sorted by id");
@@ -527,19 +1134,21 @@ function validatePhysicalModel(model) {
   const tables = requireArray(model.tables, "tables").map((table, index) => {
     requireObject(table, `tables[${index}]`);
     requireExactKeys(table, TABLE_KEYS, "table");
-    const columns = requireArray(table.columns, "columns").map((column, colIndex) => {
-      requireObject(column, `columns[${colIndex}]`);
-      requireExactKeys(column, COLUMN_KEYS, "column");
-      return {
-        id: requireNonblankString(column.id, "id"),
-        name: requireLegalSnowflakeIdentifier(column.name, "name"),
-        ordinal: requireInt(column.ordinal, "ordinal"),
-        data_type: validateDataType(column.data_type, "data_type"),
-        nullable: requireBoolean(column.nullable, "nullable"),
-        default: requireOptionalString(column.default, "default"),
-        comment: requireOptionalString(column.comment, "comment"),
-      };
-    });
+    const columns = requireArray(table.columns, "columns").map(
+      (column, colIndex) => {
+        requireObject(column, `columns[${colIndex}]`);
+        requireExactKeys(column, COLUMN_KEYS, "column");
+        return {
+          id: requireNonblankString(column.id, "id"),
+          name: requireLegalSnowflakeIdentifier(column.name, "name"),
+          ordinal: requireInt(column.ordinal, "ordinal"),
+          data_type: validateDataType(column.data_type, "data_type"),
+          nullable: requireBoolean(column.nullable, "nullable"),
+          default: requireOptionalString(column.default, "default"),
+          comment: requireOptionalString(column.comment, "comment"),
+        };
+      },
+    );
     if (columns.length === 0) {
       fail("columns must be a non-empty list");
     }
@@ -557,9 +1166,10 @@ function validatePhysicalModel(model) {
       (constraint, cIndex) => {
         requireObject(constraint, `constraints[${cIndex}]`);
         requireExactKeys(constraint, CONSTRAINT_KEYS, "constraint");
-        const constraintColumns = requireArray(constraint.columns, "columns").map((id) =>
-          requireNonblankString(id, "constraint column id"),
-        );
+        const constraintColumns = requireArray(
+          constraint.columns,
+          "columns",
+        ).map((id) => requireNonblankString(id, "constraint column id"));
         if (constraintColumns.length === 0) {
           fail("columns must be a non-empty list");
         }
@@ -591,7 +1201,9 @@ function validatePhysicalModel(model) {
     }
     const constraintIds = constraints.map((constraint) => constraint.id);
     requireUniqueIds(constraintIds, "constraints");
-    const primaryKeyCount = constraints.filter((c) => c.kind === "primary_key").length;
+    const primaryKeyCount = constraints.filter(
+      (c) => c.kind === "primary_key",
+    ).length;
     if (primaryKeyCount > 1) {
       fail("table may have at most one primary_key constraint");
     }
@@ -634,7 +1246,11 @@ function validatePhysicalModel(model) {
     if (table.kind !== "table") {
       fail(`unsupported table kind ${table.kind}`);
     }
-    const expectedTableId = tableId(namespace.catalog, namespace.schema, table.name);
+    const expectedTableId = tableId(
+      namespace.catalog,
+      namespace.schema,
+      table.name,
+    );
     if (table.id !== expectedTableId) {
       fail(`id must equal ${JSON.stringify(expectedTableId)}`);
     }
@@ -665,7 +1281,10 @@ function validatePhysicalModel(model) {
         }
       }
       if (constraint.kind === "foreign_key") {
-        if (!constraint.referenced_table_id || !tableIds.has(constraint.referenced_table_id)) {
+        if (
+          !constraint.referenced_table_id ||
+          !tableIds.has(constraint.referenced_table_id)
+        ) {
           fail(
             `unresolved referenced table id ${JSON.stringify(constraint.referenced_table_id)}`,
           );
@@ -673,7 +1292,9 @@ function validatePhysicalModel(model) {
         if (constraint.referenced_columns.length === 0) {
           fail("referenced_columns is required for foreign_key");
         }
-        if (constraint.referenced_columns.length !== constraint.columns.length) {
+        if (
+          constraint.referenced_columns.length !== constraint.columns.length
+        ) {
           fail("referenced_columns must match columns length for foreign_key");
         }
         const refCols = columnsByTable.get(constraint.referenced_table_id);
@@ -702,12 +1323,14 @@ function validatePhysicalModel(model) {
     (rel, index) => {
       requireObject(rel, `relationships[${index}]`);
       requireExactKeys(rel, RELATIONSHIP_KEYS, "relationship");
-      const sourceColumnIds = requireArray(rel.source_column_ids, "source_column_ids").map(
-        (id) => requireNonblankString(id, "source column id"),
-      );
-      const targetColumnIds = requireArray(rel.target_column_ids, "target_column_ids").map(
-        (id) => requireNonblankString(id, "target column id"),
-      );
+      const sourceColumnIds = requireArray(
+        rel.source_column_ids,
+        "source_column_ids",
+      ).map((id) => requireNonblankString(id, "source column id"));
+      const targetColumnIds = requireArray(
+        rel.target_column_ids,
+        "target_column_ids",
+      ).map((id) => requireNonblankString(id, "target column id"));
       if (sourceColumnIds.length === 0) {
         fail("source_column_ids must be a non-empty list");
       }
@@ -720,9 +1343,15 @@ function validatePhysicalModel(model) {
       return {
         id: requireNonblankString(rel.id, "id"),
         name: requireNonblankString(rel.name, "name"),
-        source_table_id: requireNonblankString(rel.source_table_id, "source_table_id"),
+        source_table_id: requireNonblankString(
+          rel.source_table_id,
+          "source_table_id",
+        ),
         source_column_ids: sourceColumnIds,
-        target_table_id: requireNonblankString(rel.target_table_id, "target_table_id"),
+        target_table_id: requireNonblankString(
+          rel.target_table_id,
+          "target_table_id",
+        ),
         target_column_ids: targetColumnIds,
         cardinality: requireNonblankString(rel.cardinality, "cardinality"),
       };
@@ -798,7 +1427,9 @@ function validatePhysicalModel(model) {
 
 export function canonicalProjectToDiagram(project) {
   requireObject(project, "project");
-  const unexpected = Object.keys(project).filter((key) => !TOP_LEVEL_ALLOWED.has(key));
+  const unexpected = Object.keys(project).filter(
+    (key) => !TOP_LEVEL_ALLOWED.has(key),
+  );
   if (unexpected.length) {
     fail(`project has unexpected field ${unexpected.sort().join(", ")}`);
   }
@@ -819,6 +1450,9 @@ export function canonicalProjectToDiagram(project) {
   const model = validatePhysicalModel(project.physical_model);
   const tableIds = new Set(model.tables.map((t) => t.id));
   const layout = parseDiagramLayout(project.diagram_layout, tableIds);
+  if (project.drawdb_document !== undefined) {
+    return validateDrawdbDocument(project.drawdb_document);
+  }
   const namespaceById = new Map(model.namespaces.map((ns) => [ns.id, ns]));
 
   const tables = model.tables.map((table, index) => {
@@ -874,9 +1508,7 @@ export function canonicalProjectToDiagram(project) {
       uniqueConstraints,
       color: "#175e7a",
       collapsed: false,
-      ...(Object.keys(constraintView).length > 0
-        ? { constraintView }
-        : {}),
+      ...(Object.keys(constraintView).length > 0 ? { constraintView } : {}),
       namespace: {
         id: namespace.id,
         catalog: namespace.catalog,
@@ -947,11 +1579,52 @@ export function diagramToCanonicalProject({
   tables,
   relationships,
   transform,
+  database,
+  notes,
+  areas,
+  types,
+  enums,
 }) {
   const modelName = requireNonblankString(title, "title");
   requireArray(tables, "tables");
   requireArray(relationships, "relationships");
   requireObject(transform, "transform");
+
+  // Native files preserve every drawDB database target in drawdb_document.
+  // The canonical physical model remains an empty, valid Snowflake projection
+  // when the active database cannot be losslessly represented by that model.
+  if (database !== undefined && database !== "snowflake") {
+    const physical_model = {
+      model_version: MODEL_VERSION,
+      name: modelName,
+      namespaces: [],
+      tables: [],
+      relationships: [],
+    };
+    return {
+      project_version: PROJECT_VERSION,
+      physical_model,
+      diagram_layout: {
+        nodes: {},
+        viewport: {
+          x: requireFiniteNumber(transform.pan?.x ?? 0, "viewport.x"),
+          y: requireFiniteNumber(transform.pan?.y ?? 0, "viewport.y"),
+          zoom: requireFiniteNumber(transform.zoom ?? 1, "viewport.zoom"),
+        },
+      },
+      drawdb_document: validateDrawdbDocument({
+        database,
+        title,
+        tables,
+        relationships,
+        notes: notes ?? [],
+        areas: areas ?? [],
+        types: types ?? [],
+        enums: enums ?? [],
+        transform,
+      }),
+    };
+  }
 
   if (tables.length === 0) {
     if (relationships.length > 0) {
@@ -970,7 +1643,7 @@ export function diagramToCanonicalProject({
       relationships: [],
     };
     assertNoForbiddenKeys(physical_model, "physical_model");
-    return {
+    const project = {
       project_version: PROJECT_VERSION,
       physical_model,
       diagram_layout: {
@@ -982,6 +1655,20 @@ export function diagramToCanonicalProject({
         },
       },
     };
+    if (database !== undefined) {
+      project.drawdb_document = validateDrawdbDocument({
+        database,
+        title,
+        tables,
+        relationships,
+        notes: notes ?? [],
+        areas: areas ?? [],
+        types: types ?? [],
+        enums: enums ?? [],
+        transform,
+      });
+    }
+    return project;
   }
 
   const tablesWithNamespace = tables.filter((table) =>
@@ -1080,11 +1767,15 @@ export function diagramToCanonicalProject({
         data_type: dataTypeFromField({ ...field, name: columnName }),
         nullable: !field.notNull,
         default:
-          field.default === undefined || field.default === null || field.default === ""
+          field.default === undefined ||
+          field.default === null ||
+          field.default === ""
             ? null
             : String(field.default),
         comment:
-          field.comment === undefined || field.comment === null || field.comment === ""
+          field.comment === undefined ||
+          field.comment === null ||
+          field.comment === ""
             ? null
             : String(field.comment),
         _primary: Boolean(field.primary),
@@ -1111,10 +1802,16 @@ export function diagramToCanonicalProject({
         constraintView.primaryKeyName.trim()
           ? toSnowflakeIdentifier(constraintView.primaryKeyName, "constraint")
           : null;
-      const pkName = reusedPkName || toSnowflakeIdentifier(`PK_${tableName}`, "constraint");
+      const pkName =
+        reusedPkName || toSnowflakeIdentifier(`PK_${tableName}`, "constraint");
       claimUniqueName(uniqueNameSeen, pkName, "constraint");
       constraints.push({
-        id: constraintId(namespace.catalog, namespace.schema, tableName, pkName),
+        id: constraintId(
+          namespace.catalog,
+          namespace.schema,
+          tableName,
+          pkName,
+        ),
         name: pkName,
         kind: "primary_key",
         columns: pkColumns,
@@ -1131,7 +1828,10 @@ export function diagramToCanonicalProject({
       const reusedUniqueName =
         typeof storedUniqueNames[column._oldId] === "string" &&
         storedUniqueNames[column._oldId].trim()
-          ? toSnowflakeIdentifier(storedUniqueNames[column._oldId], "constraint")
+          ? toSnowflakeIdentifier(
+              storedUniqueNames[column._oldId],
+              "constraint",
+            )
           : null;
       const uqName = claimUniqueName(
         uniqueNameSeen,
@@ -1140,7 +1840,12 @@ export function diagramToCanonicalProject({
         "constraint",
       );
       constraints.push({
-        id: constraintId(namespace.catalog, namespace.schema, tableName, uqName),
+        id: constraintId(
+          namespace.catalog,
+          namespace.schema,
+          tableName,
+          uqName,
+        ),
         name: uqName,
         kind: "unique",
         columns: [column.id],
@@ -1171,7 +1876,12 @@ export function diagramToCanonicalProject({
       }
       requireUniqueIds(columnIds, "columns");
       constraints.push({
-        id: constraintId(namespace.catalog, namespace.schema, tableName, uqName),
+        id: constraintId(
+          namespace.catalog,
+          namespace.schema,
+          tableName,
+          uqName,
+        ),
         name: uqName,
         kind: "unique",
         columns: columnIds,
@@ -1206,7 +1916,9 @@ export function diagramToCanonicalProject({
       ),
       constraints: sortById(constraints),
       comment:
-        table.comment === undefined || table.comment === null || table.comment === ""
+        table.comment === undefined ||
+        table.comment === null ||
+        table.comment === ""
           ? null
           : String(table.comment),
       _catalog: namespace.catalog,
@@ -1268,7 +1980,9 @@ export function diagramToCanonicalProject({
       fail("relationship source and target column lists must be non-empty");
     }
     if (sourceColumnIds.length !== targetColumnIds.length) {
-      fail("relationship source and target column lists must have equal length");
+      fail(
+        "relationship source and target column lists must have equal length",
+      );
     }
     requireUniqueIds(sourceColumnIds, "columns");
     requireUniqueIds(targetColumnIds, "referenced_columns");
@@ -1357,7 +2071,7 @@ export function diagramToCanonicalProject({
   assertNoForbiddenKeys(physical_model, "physical_model");
   validatePhysicalModel(physical_model);
 
-  return {
+  const project = {
     project_version: PROJECT_VERSION,
     physical_model,
     diagram_layout: {
@@ -1371,6 +2085,20 @@ export function diagramToCanonicalProject({
       },
     },
   };
+  if (database !== undefined) {
+    project.drawdb_document = validateDrawdbDocument({
+      database,
+      title,
+      tables,
+      relationships,
+      notes: notes ?? [],
+      areas: areas ?? [],
+      types: types ?? [],
+      enums: enums ?? [],
+      transform,
+    });
+  }
+  return project;
 }
 
 function columnNameById(table, columnObjectId) {
@@ -1392,7 +2120,9 @@ function tableById(model, tableObjectId) {
 function namespaceForTable(model, table) {
   const namespace = model.namespaces.find((ns) => ns.id === table.namespace_id);
   if (!namespace) {
-    fail(`namespace_id references unknown namespace ${JSON.stringify(table.namespace_id)}`);
+    fail(
+      `namespace_id references unknown namespace ${JSON.stringify(table.namespace_id)}`,
+    );
   }
   return namespace;
 }
@@ -1403,7 +2133,7 @@ function renderColumn(column) {
     parts.push("NOT NULL");
   }
   if (column.default !== null) {
-    parts.push(`DEFAULT ${column.default}`);
+    parts.push(`DEFAULT ${snowflakeDefaultLiteral(column.default)}`);
   }
   if (column.comment !== null) {
     parts.push(`COMMENT ${sqlStringLiteral(column.comment)}`);
@@ -1502,7 +2232,9 @@ export function renderCanonicalSnowflakeDDL(projectOrModel) {
       ...table.columns.map((column) => `    ${renderColumn(column)}`),
       ...table.constraints
         .filter((constraint) => constraint.kind !== "foreign_key")
-        .map((constraint) => `    ${renderInlineConstraint(constraint, table)}`),
+        .map(
+          (constraint) => `    ${renderInlineConstraint(constraint, table)}`,
+        ),
     ];
     bodyLines.forEach((bodyLine, bodyIndex) => {
       const suffix = bodyIndex < bodyLines.length - 1 ? "," : "";
