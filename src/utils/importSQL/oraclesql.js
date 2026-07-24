@@ -1,6 +1,6 @@
 import { nanoid } from "nanoid";
-import { Cardinality, Constraint, DB } from "../../data/constants";
-import { dbToTypes } from "../../data/datatypes";
+import { Cardinality, Constraint, DB } from "../../data/constants.js";
+import { dbToTypes } from "../../data/datatypes.js";
 
 const affinity = {
   [DB.ORACLESQL]: new Proxy(

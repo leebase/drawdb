@@ -1,8 +1,19 @@
-import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  dialog,
+  ipcMain,
+  safeStorage,
+  shell,
+} from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { canonicalProjectToDiagram } from "../erdTool/projectAdapter.js";
+import { createConnectionProfileStore } from "./connectionProfiles.js";
+import { createSnowflakeService } from "./snowflakeService.js";
+import { createLlmService } from "./llmService.js";
 
 const electronOutputDirectory = __dirname;
 const preloadPath = path.join(electronOutputDirectory, "preload.cjs");
@@ -14,11 +25,32 @@ const projectFileFilters = [
     extensions: ["erd.json", "json"],
   },
 ];
-const ddlFileFilters = [{ name: "Snowflake SQL", extensions: ["sql"] }];
+const ddlFileFilters = [{ name: "SQL files", extensions: ["sql"] }];
 const maximumProjectBytes = 25 * 1024 * 1024;
 const maximumDdlBytes = 25 * 1024 * 1024;
+const autoArrangeChannel = "diagram:auto-arrange-request";
+const connectionManageChannel = "connections:manage-request";
+const connectionReverseEngineerChannel =
+  "connections:reverse-engineer-request";
+const connectionForwardEngineerChannel =
+  "connections:forward-engineer-request";
 let currentProjectPath: string | null = null;
 const trustedProjectRenderers = new WeakSet<object>();
+const connectionProfileStore = createConnectionProfileStore({
+  app,
+  safeStorage,
+});
+const snowflakeService = createSnowflakeService({
+  openExternalBrowser: (url: string) => {
+    void shell.openExternal(url);
+  },
+  savedProfileResolver: (profileId: string) =>
+    connectionProfileStore.resolveSnowflakeConnection(profileId),
+});
+const llmService = createLlmService({
+  app,
+  safeStorage,
+});
 
 type ProjectSaveRequest = {
   contents: string;
@@ -28,6 +60,7 @@ type ProjectSaveRequest = {
 type DdlExportRequest = {
   contents: string;
   suggestedName: string;
+  provider?: string;
 };
 
 function projectError(action: "open" | "save"): Error {
@@ -52,6 +85,26 @@ function assertTrustedProjectSender(event: Electron.IpcMainInvokeEvent): void {
   ) {
     throw new Error("[PROJECT_ACCESS_DENIED] Untrusted project-file request.");
   }
+}
+
+function validateIpcRecord(
+  payload: unknown,
+  allowedKeys: string[],
+  label: string,
+): Record<string, unknown> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error(`[SNOWFLAKE_INVALID_REQUEST] ${label} must be an object.`);
+  }
+  const value = payload as Record<string, unknown>;
+  const unexpected = Object.keys(value).filter(
+    (key) => !allowedKeys.includes(key),
+  );
+  if (unexpected.length) {
+    throw new Error(
+      `[SNOWFLAKE_INVALID_REQUEST] ${label} contains an unexpected field: ${unexpected[0]}.`,
+    );
+  }
+  return value;
 }
 
 function validateProjectContents(contents: unknown): string {
@@ -118,11 +171,8 @@ function validateDdlExportRequest(payload: unknown): DdlExportRequest {
   }
   const record = payload as Record<string, unknown>;
   const keys = Object.keys(record).sort();
-  if (
-    keys.length !== 2 ||
-    keys[0] !== "contents" ||
-    keys[1] !== "suggestedName"
-  ) {
+  const allowedKeys = new Set(["contents", "provider", "suggestedName"]);
+  if (keys.some((key) => !allowedKeys.has(key))) {
     throw new Error("DDL export request has unexpected fields");
   }
   if (typeof record.contents !== "string" || !record.contents.trim()) {
@@ -142,7 +192,19 @@ function validateDdlExportRequest(payload: unknown): DdlExportRequest {
   ) {
     throw new Error("suggested DDL name must end in .sql");
   }
-  return { contents: record.contents, suggestedName };
+  if (
+    record.provider !== undefined &&
+    record.provider !== "snowflake" &&
+    record.provider !== "sqlite"
+  ) {
+    throw new Error("DDL export provider is invalid");
+  }
+  return {
+    contents: record.contents,
+    suggestedName,
+    provider:
+      typeof record.provider === "string" ? record.provider : undefined,
+  };
 }
 
 function writeProjectAtomically(filePath: string, contents: string): void {
@@ -267,8 +329,10 @@ function registerDdlExportHandler(): void {
     assertTrustedProjectSender(event);
     try {
       const request = validateDdlExportRequest(payload);
+      const providerLabel =
+        request.provider === "sqlite" ? "SQLite" : "Snowflake";
       const result = await dialog.showSaveDialog({
-        title: "Export Snowflake DDL",
+        title: `Export ${providerLabel} DDL`,
         defaultPath: request.suggestedName,
         filters: ddlFileFilters,
       });
@@ -284,6 +348,219 @@ function registerDdlExportHandler(): void {
       throw ddlExportError();
     }
   });
+}
+
+function registerConnectionProfileHandlers(): void {
+  ipcMain.handle("connections:list", (event) => {
+    assertTrustedProjectSender(event);
+    return connectionProfileStore.listProfiles();
+  });
+  ipcMain.handle("connections:create", (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return connectionProfileStore.createProfile(payload);
+  });
+  ipcMain.handle("connections:update", (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateIpcRecord(
+      payload,
+      ["profileId", "profile"],
+      "connection update request",
+    );
+    return connectionProfileStore.updateProfile(
+      request.profileId,
+      request.profile,
+    );
+  });
+  ipcMain.handle("connections:duplicate", (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateIpcRecord(
+      payload,
+      ["profileId"],
+      "connection duplicate request",
+    );
+    return connectionProfileStore.duplicateProfile(request.profileId);
+  });
+  ipcMain.handle("connections:delete", (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateIpcRecord(
+      payload,
+      ["profileId"],
+      "connection delete request",
+    );
+    return connectionProfileStore.deleteProfile(request.profileId);
+  });
+  ipcMain.handle("connections:test", (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateIpcRecord(
+      payload,
+      ["profileId"],
+      "connection test request",
+    );
+    return connectionProfileStore.testProfile(request.profileId);
+  });
+  ipcMain.handle("connections:forward-engineer", (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return connectionProfileStore.forwardEngineer(payload);
+  });
+}
+
+function registerSnowflakeHandlers(): void {
+  ipcMain.handle("snowflake:profiles", (event) => {
+    assertTrustedProjectSender(event);
+    return snowflakeService.listProfiles();
+  });
+  ipcMain.handle("snowflake:connect", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return await snowflakeService.connect(payload);
+  });
+  ipcMain.handle("snowflake:disconnect", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateIpcRecord(payload, ["sessionId"], "disconnect request");
+    return await snowflakeService.disconnect(request.sessionId);
+  });
+  ipcMain.handle("snowflake:list-databases", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateIpcRecord(payload, ["sessionId"], "database-list request");
+    return await snowflakeService.listDatabases(request.sessionId);
+  });
+  ipcMain.handle("snowflake:list-schemas", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateIpcRecord(
+      payload,
+      ["sessionId", "database"],
+      "schema-list request",
+    );
+    return await snowflakeService.listSchemas(
+      request.sessionId,
+      request.database,
+    );
+  });
+  ipcMain.handle("snowflake:list-tables", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateIpcRecord(
+      payload,
+      ["sessionId", "database", "schema"],
+      "table-list request",
+    );
+    return await snowflakeService.listTables(
+      request.sessionId,
+      request.database,
+      request.schema,
+    );
+  });
+  ipcMain.handle("snowflake:reverse-engineer", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return await snowflakeService.reverseEngineer(payload);
+  });
+}
+
+function registerLlmHandlers(): void {
+  ipcMain.handle("llm:status", (event) => {
+    assertTrustedProjectSender(event);
+    return llmService.status();
+  });
+  ipcMain.handle("llm:set-api-key", (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return llmService.setApiKey(payload);
+  });
+  ipcMain.handle("llm:clear-api-key", (event) => {
+    assertTrustedProjectSender(event);
+    return llmService.clearApiKey();
+  });
+  ipcMain.handle("llm:propose-schema", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return await llmService.propose(payload);
+  });
+}
+
+function sendAutoArrangeToActiveDiagram(): void {
+  const window =
+    BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  if (!window || window.isDestroyed()) return;
+  window.webContents.send(autoArrangeChannel);
+}
+
+function sendToActiveDiagram(channel: string): void {
+  const window =
+    BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  if (!window || window.isDestroyed()) return;
+  window.webContents.send(channel);
+}
+
+function registerApplicationMenu(): void {
+  const template: Electron.MenuItemConstructorOptions[] = [
+    ...(process.platform === "darwin"
+      ? [
+          {
+            label: app.name,
+            submenu: [
+              { role: "about" },
+              { type: "separator" },
+              { role: "quit" },
+            ],
+          } satisfies Electron.MenuItemConstructorOptions,
+        ]
+      : []),
+    {
+      label: "File",
+      submenu: [{ role: "close" }],
+    },
+    {
+      label: "Edit",
+      submenu: [
+        { role: "undo" },
+        { role: "redo" },
+        { type: "separator" },
+        { role: "cut" },
+        { role: "copy" },
+        { role: "paste" },
+      ],
+    },
+    {
+      label: "Diagram",
+      submenu: [
+        {
+          label: "Auto Arrange",
+          accelerator: "CmdOrCtrl+Shift+L",
+          click: sendAutoArrangeToActiveDiagram,
+        },
+      ],
+    },
+    {
+      label: "Connections",
+      submenu: [
+        {
+          label: "Manage Connections",
+          accelerator: "CmdOrCtrl+Shift+C",
+          click: () => sendToActiveDiagram(connectionManageChannel),
+        },
+        { type: "separator" },
+        {
+          label: "Reverse Engineer From Connection",
+          click: () => sendToActiveDiagram(connectionReverseEngineerChannel),
+        },
+        {
+          label: "Forward Engineer To Connection",
+          click: () => sendToActiveDiagram(connectionForwardEngineerChannel),
+        },
+      ],
+    },
+    {
+      label: "View",
+      submenu: [
+        { role: "reload" },
+        { role: "toggleDevTools" },
+        { type: "separator" },
+        { role: "resetZoom" },
+        { role: "zoomIn" },
+        { role: "zoomOut" },
+        { type: "separator" },
+        { role: "togglefullscreen" },
+      ],
+    },
+  ];
+
+  Menu.setApplicationMenu(Menu.buildFromTemplate(template));
 }
 
 function resolveRendererEntry(): string {
@@ -322,6 +599,9 @@ function createWindow(): BrowserWindow {
     },
   });
   trustedProjectRenderers.add(window.webContents);
+  window.webContents.on("destroyed", () => {
+    void snowflakeService.disconnectAll();
+  });
 
   window.webContents.on("will-navigate", (event, url) => {
     let isApplicationDocument = false;
@@ -353,6 +633,10 @@ function createWindow(): BrowserWindow {
 app.whenReady().then(() => {
   registerProjectFileHandlers();
   registerDdlExportHandler();
+  registerConnectionProfileHandlers();
+  registerSnowflakeHandlers();
+  registerLlmHandlers();
+  registerApplicationMenu();
   createWindow();
 
   app.on("activate", () => {
@@ -366,4 +650,8 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin") {
     app.quit();
   }
+});
+
+app.on("before-quit", () => {
+  void snowflakeService.disconnectAll();
 });

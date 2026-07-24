@@ -1,0 +1,57 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS012-REVIEW-001",
+      "severity": "Medium",
+      "file": ".gitignore",
+      "location": "lines 10-17; package.json lines 34-37",
+      "problem": "Electron Builder writes generated packages to dist-installers, but that directory is not ignored alongside dist, dist-desktop, dist-electron, and dist-ssr. Successful packaging will leave large native artifacts as unignored workspace output.",
+      "proposed_fix": "Add dist-installers/ to .gitignore and optionally assert in the focused packaging test that the configured output directory is covered by generated-output policy."
+    },
+    {
+      "id": "SS012-REVIEW-002",
+      "severity": "Medium",
+      "file": "tests/cross-platform-packaging.test.mjs",
+      "location": "lines 232-369",
+      "problem": "The test meaningfully validates static targets, architectures, resources, scripts, and naming for macOS, Linux, and Windows, but it never builds or inspects a native package. The governed smoke is explicitly web-baseline evidence, so there is still no executable proof of package production, installation, or packaged launch on any target platform.",
+      "proposed_fix": "Retain the static regression test and add native-host packaging jobs or governed artifact evidence for macOS, Linux, and Windows, including the documented install, launch, offline editor, native file, export, link, and notice checks."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall -q scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Compiled the governed smoke checker successfully with quiet output; the command emitted no text and any bytecode remained under scripts/__pycache__/."
+    }
+  ],
+  "lenses": {
+    "cross-platform installer configuration": {
+      "justification": "The repair declares coherent unsigned macOS arm64/x64 DMG and ZIP, Linux x64 AppImage, and Windows x64 NSIS and portable targets, with publishing disabled and collision-free Windows artifact names."
+    },
+    "Electron and drawDB preservation": {
+      "justification": "The existing Electron main/preload build, isolated and sandboxed runtime, local editor route, and separate ordinary web build remain intact; governed web smoke reports startup and core-flow success without blocking errors."
+    },
+    "offline desktop constraints": {
+      "justification": "Relative renderer assets and Electron loadFile startup avoid Python, Vite preview, localhost, and any packaged runtime server dependency."
+    },
+    "lockfile reproducibility": {
+      "justification": "package-lock.json matches the root electron-builder declaration and contains the resolved 26.15.3 package, dependency graph, integrity metadata, and executable mapping."
+    },
+    "generated-output handling": {
+      "finding_ids": [
+        "SS012-REVIEW-001"
+      ],
+      "justification": "The intermediate build directories are ignored, but the configured native installer output directory is omitted from .gitignore."
+    },
+    "test and smoke adequacy": {
+      "finding_ids": [
+        "SS012-REVIEW-002"
+      ],
+      "justification": "The focused suite provides useful static coverage of all three platform configurations, while the manifest and plans correctly identify the supplied smoke as web-only and native artifact smoke as pending."
+    },
+    "review environment": {
+      "justification": "The workspace is not exposed as a functional Git worktree and its current node_modules install lacks the locked builder executable; neither limitation demonstrates a source defect in the repaired lockfile or configuration."
+    }
+  }
+}

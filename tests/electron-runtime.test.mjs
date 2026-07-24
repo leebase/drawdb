@@ -99,13 +99,19 @@ async function startProductionMainWithElectronHarness({
   const windows = [];
   const externalUrls = [];
   const ipcHandlers = new Map();
+  const menuTemplates = [];
   const openDialogCalls = [];
   const saveDialogCalls = [];
+  const sentMessages = [];
   let readyPromise;
 
   class BrowserWindow {
     static getAllWindows() {
       return windows;
+    }
+
+    static getFocusedWindow() {
+      return windows[0] ?? null;
     }
 
     constructor(options) {
@@ -121,8 +127,15 @@ async function startProductionMainWithElectronHarness({
         setWindowOpenHandler: (callback) => {
           this.webContents.windowOpenHandler = callback;
         },
+        send: (channel, payload) => {
+          sentMessages.push({ channel, payload });
+        },
       };
       windows.push(this);
+    }
+
+    isDestroyed() {
+      return false;
     }
 
     loadFile(filePath, options) {
@@ -168,6 +181,15 @@ async function startProductionMainWithElectronHarness({
           return Promise.reject(saveDialogResult);
         }
         return Promise.resolve(saveDialogResult);
+      },
+    },
+    Menu: {
+      buildFromTemplate(template) {
+        menuTemplates.push(template);
+        return { template };
+      },
+      setApplicationMenu(menu) {
+        menuTemplates.push(menu.template);
       },
     },
     ipcMain: {
@@ -233,9 +255,11 @@ async function startProductionMainWithElectronHarness({
     externalUrls,
     ipcHandlers,
     loadFiles,
+    menuTemplates,
     openDialogCalls,
     requiredModules,
     saveDialogCalls,
+    sentMessages,
     windows,
   };
 }
@@ -243,6 +267,7 @@ async function startProductionMainWithElectronHarness({
 function loadProductionPreloadWithElectronHarness() {
   const exposed = new Map();
   const invocations = [];
+  const listeners = [];
   const electron = {
     contextBridge: {
       exposeInMainWorld(name, value) {
@@ -253,6 +278,9 @@ function loadProductionPreloadWithElectronHarness() {
       invoke(channel, payload) {
         invocations.push({ channel, payload });
         return Promise.resolve({ channel, payload });
+      },
+      on(channel, listener) {
+        listeners.push({ channel, listener });
       },
     },
   };
@@ -277,7 +305,7 @@ function loadProductionPreloadWithElectronHarness() {
     electronPreloadBuildPath,
   );
 
-  return { exposed, invocations };
+  return { exposed, invocations, listeners };
 }
 
 function canonicalOfflineProject(title = "offline-project") {
@@ -522,9 +550,17 @@ describe("Electron runtime scaffold", () => {
     assert.match(preload, /ipcRenderer\.invoke\("project:save"/);
     assert.match(preload, /ipcRenderer\.invoke\("project:save-as"/);
     assert.match(preload, /ipcRenderer\.invoke\("ddl:export"/);
+    assert.match(preload, /ipcRenderer\.invoke\("snowflake:profiles"/);
+    assert.match(preload, /ipcRenderer\.invoke\("snowflake:connect"/);
+    assert.match(preload, /ipcRenderer\.invoke\("snowflake:disconnect"/);
+    assert.match(preload, /ipcRenderer\.invoke\("snowflake:list-databases"/);
+    assert.match(preload, /ipcRenderer\.invoke\("snowflake:list-schemas"/);
+    assert.match(preload, /ipcRenderer\.invoke\("snowflake:list-tables"/);
+    assert.match(preload, /ipcRenderer\.invoke\("snowflake:reverse-engineer"/);
+    assert.match(preload, /ipcRenderer\.on\(autoArrangeChannel/);
     assert.doesNotMatch(
       preload,
-      /ipcRenderer\.(?:on|send|sendSync|postMessage)/,
+      /ipcRenderer\.(?:send|sendSync|postMessage)/,
     );
     assert.doesNotMatch(preload, /invoke\(\s*(?:channel|\.\.\.)/);
     assert.doesNotMatch(preload, /require\s*\(|node:fs/);
@@ -657,10 +693,28 @@ describe("SS-004 native project file bridge contract", () => {
     assert.match(main, /\bipcMain\b/);
     assert.match(main, /node:fs/);
     assert.deepEqual([...runtime.ipcHandlers.keys()].sort(), [
+      "connections:create",
+      "connections:delete",
+      "connections:duplicate",
+      "connections:forward-engineer",
+      "connections:list",
+      "connections:test",
+      "connections:update",
       "ddl:export",
+      "llm:clear-api-key",
+      "llm:propose-schema",
+      "llm:set-api-key",
+      "llm:status",
       "project:open",
       "project:save",
       "project:save-as",
+      "snowflake:connect",
+      "snowflake:disconnect",
+      "snowflake:list-databases",
+      "snowflake:list-schemas",
+      "snowflake:list-tables",
+      "snowflake:profiles",
+      "snowflake:reverse-engineer",
     ]);
   });
 
@@ -671,18 +725,48 @@ describe("SS-004 native project file bridge contract", () => {
     assert.ok(desktopApi, "preload must expose window.drawdbDesktop");
     assert.equal(Object.isFrozen(desktopApi), true);
     assert.deepEqual(Object.keys(desktopApi).sort(), [
+      "connections",
       "ddlExport",
+      "llm",
       "projectFiles",
       "runtimeVersion",
+      "snowflake",
     ]);
-    assert.equal(desktopApi.runtimeVersion, 1);
+    assert.equal(desktopApi.runtimeVersion, 4);
     assert.equal(Object.isFrozen(desktopApi.projectFiles), true);
     assert.equal(Object.isFrozen(desktopApi.ddlExport), true);
+    assert.equal(Object.isFrozen(desktopApi.connections), true);
+    assert.equal(Object.isFrozen(desktopApi.snowflake), true);
+    assert.equal(Object.isFrozen(desktopApi.llm), true);
     assert.deepEqual(Object.keys(desktopApi.ddlExport), ["save"]);
+    assert.deepEqual(Object.keys(desktopApi.connections).sort(), [
+      "create",
+      "delete",
+      "duplicate",
+      "forwardEngineer",
+      "list",
+      "test",
+      "update",
+    ]);
     assert.deepEqual(Object.keys(desktopApi.projectFiles).sort(), [
       "open",
       "save",
       "saveAs",
+    ]);
+    assert.deepEqual(Object.keys(desktopApi.snowflake).sort(), [
+      "connect",
+      "disconnect",
+      "listDatabases",
+      "listProfiles",
+      "listSchemas",
+      "listTables",
+      "reverseEngineer",
+    ]);
+    assert.deepEqual(Object.keys(desktopApi.llm).sort(), [
+      "clearApiKey",
+      "proposeSchema",
+      "setApiKey",
+      "status",
     ]);
     assert.equal("invoke" in desktopApi, false);
     assert.equal("ipcRenderer" in desktopApi, false);
@@ -701,11 +785,159 @@ describe("SS-004 native project file bridge contract", () => {
       suggestedName: "model.sql",
     };
     await desktopApi.ddlExport.save(ddlRequest);
+    const connectionProfile = {
+      provider: "sqlite",
+      name: "Local SQLite",
+      settings: { databasePath: "/tmp/local.sqlite" },
+      secrets: {},
+    };
+    await desktopApi.connections.list();
+    await desktopApi.connections.create(connectionProfile);
+    await desktopApi.connections.update("profile-1", connectionProfile);
+    await desktopApi.connections.duplicate("profile-1");
+    await desktopApi.connections.test("profile-1");
+    await desktopApi.connections.forwardEngineer({
+      profileId: "profile-1",
+      database: "sqlite",
+      contents: "CREATE TABLE A (ID INTEGER);\n",
+    });
+    await desktopApi.connections.delete("profile-1");
+    const connectRequest = {
+      mode: "profile",
+      profileName: "erd-tool",
+    };
+    await desktopApi.snowflake.listProfiles();
+    await desktopApi.snowflake.connect(connectRequest);
+    await desktopApi.snowflake.listDatabases("session-1");
+    await desktopApi.snowflake.listSchemas("session-1", "CHINOOK");
+    await desktopApi.snowflake.listTables(
+      "session-1",
+      "CHINOOK",
+      "PUBLIC",
+    );
+    await desktopApi.snowflake.reverseEngineer({
+      sessionId: "session-1",
+      database: "CHINOOK",
+      schema: "PUBLIC",
+      tables: ["ARTIST"],
+    });
+    await desktopApi.snowflake.disconnect("session-1");
+    await desktopApi.llm.status();
+    await desktopApi.llm.setApiKey("unit-test-key");
+    await desktopApi.llm.proposeSchema({
+      prompt: "Create a customer table",
+      database: "snowflake",
+      currentModel: {
+        summary: "Current diagram",
+        tables: [],
+        relationships: [],
+      },
+    });
+    await desktopApi.llm.clearApiKey();
     assert.deepEqual(invocations, [
       { channel: "project:open", payload: undefined },
       { channel: "project:save", payload: saveRequest },
       { channel: "project:save-as", payload: saveRequest },
       { channel: "ddl:export", payload: ddlRequest },
+      { channel: "connections:list", payload: undefined },
+      { channel: "connections:create", payload: connectionProfile },
+      {
+        channel: "connections:update",
+        payload: { profileId: "profile-1", profile: connectionProfile },
+      },
+      { channel: "connections:duplicate", payload: { profileId: "profile-1" } },
+      { channel: "connections:test", payload: { profileId: "profile-1" } },
+      {
+        channel: "connections:forward-engineer",
+        payload: {
+          profileId: "profile-1",
+          database: "sqlite",
+          contents: "CREATE TABLE A (ID INTEGER);\n",
+        },
+      },
+      { channel: "connections:delete", payload: { profileId: "profile-1" } },
+      { channel: "snowflake:profiles", payload: undefined },
+      { channel: "snowflake:connect", payload: connectRequest },
+      {
+        channel: "snowflake:list-databases",
+        payload: { sessionId: "session-1" },
+      },
+      {
+        channel: "snowflake:list-schemas",
+        payload: { sessionId: "session-1", database: "CHINOOK" },
+      },
+      {
+        channel: "snowflake:list-tables",
+        payload: {
+          sessionId: "session-1",
+          database: "CHINOOK",
+          schema: "PUBLIC",
+        },
+      },
+      {
+        channel: "snowflake:reverse-engineer",
+        payload: {
+          sessionId: "session-1",
+          database: "CHINOOK",
+          schema: "PUBLIC",
+          tables: ["ARTIST"],
+        },
+      },
+      {
+        channel: "snowflake:disconnect",
+        payload: { sessionId: "session-1" },
+      },
+      { channel: "llm:status", payload: undefined },
+      {
+        channel: "llm:set-api-key",
+        payload: { apiKey: "unit-test-key" },
+      },
+      {
+        channel: "llm:propose-schema",
+        payload: {
+          prompt: "Create a customer table",
+          database: "snowflake",
+          currentModel: {
+            summary: "Current diagram",
+            tables: [],
+            relationships: [],
+          },
+        },
+      },
+      { channel: "llm:clear-api-key", payload: undefined },
+    ]);
+  });
+
+  it("registers a native Connections menu with renderer-owned actions", async () => {
+    const runtime = await startProductionMainWithElectronHarness();
+    const template = runtime.menuTemplates.at(-1);
+    const connectionsMenu = template.find((item) => item.label === "Connections");
+
+    assert.ok(connectionsMenu, "Connections menu must be present");
+    assert.deepEqual(
+      connectionsMenu.submenu
+        .filter((item) => item.label)
+        .map((item) => item.label),
+      [
+        "Manage Connections",
+        "Reverse Engineer From Connection",
+        "Forward Engineer To Connection",
+      ],
+    );
+
+    for (const item of connectionsMenu.submenu.filter((entry) => entry.click)) {
+      item.click();
+    }
+    assert.deepEqual(runtime.sentMessages.slice(-3), [
+      { channel: "connections:manage-request", payload: undefined },
+      {
+        channel: "connections:reverse-engineer-request",
+        payload: undefined,
+      },
+      {
+        channel: "connections:forward-engineer-request",
+        payload: undefined,
+      },
     ]);
   });
 

@@ -1,4 +1,4 @@
-import { DB } from "../../data/constants";
+import { DB } from "../../data/constants.js";
 
 function quoteColumn(str, db) {
   switch (db) {

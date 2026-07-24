@@ -7,6 +7,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { DB } from "../src/data/constants.js";
 import { snowflakeTypes } from "../src/data/datatypes.js";
 import { exportSQL } from "../src/utils/exportSQL/index.js";
+import {
+  parseSnowflakeDDLToCanonicalProject,
+  parseSnowflakeDDLToDiagram,
+  renderCanonicalSnowflakeDDL,
+} from "../src/erdTool/projectAdapter.js";
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -435,6 +440,90 @@ describe("SS-005 Snowflake DDL export", () => {
     assert.match(ddl, /CREATE TABLE IF NOT EXISTS "users"/);
     assert.match(ddl, /"id" INTEGER NOT NULL/);
     assert.match(ddl, /PRIMARY KEY\("id"\)/);
+  });
+
+  it("imports generated Snowflake DDL into the canonical model and renders it deterministically", () => {
+    const imported = parseSnowflakeDDLToCanonicalProject(expectedSnowflakeDdl, {
+      name: "retail-import",
+    });
+
+    assert.equal(imported.project_version, "1");
+    assert.equal(imported.physical_model.name, "retail-import");
+    assert.deepEqual(
+      imported.physical_model.namespaces.map((namespace) => namespace.id),
+      ["namespace:ANALYTICS.RETAIL_DATA"],
+    );
+    assert.deepEqual(
+      imported.physical_model.tables.map((table) => table.id),
+      [
+        "table:ANALYTICS.RETAIL_DATA.ORDER_ITEMS",
+        "table:ANALYTICS.RETAIL_DATA.PRODUCT_CATALOG",
+      ],
+    );
+    assert.equal(imported.physical_model.relationships.length, 1);
+    assert.equal(
+      imported.physical_model.tables[1].comment,
+      "Products sold by Lee's shop",
+    );
+    assert.equal(renderCanonicalSnowflakeDDL(imported), expectedSnowflakeDdl);
+    assert.equal(
+      renderCanonicalSnowflakeDDL(imported),
+      renderCanonicalSnowflakeDDL(
+        parseSnowflakeDDLToCanonicalProject(renderCanonicalSnowflakeDDL(imported)),
+      ),
+    );
+  });
+
+  it("converts imported Snowflake DDL to an editable drawDB diagram without credentials", () => {
+    const diagram = parseSnowflakeDDLToDiagram(expectedSnowflakeDdl, {
+      name: "retail-import",
+    });
+
+    assert.equal(diagram.database, DB.SNOWFLAKE);
+    assert.equal(diagram.title, "retail-import");
+    assert.equal(diagram.tables.length, 2);
+    assert.equal(diagram.relationships.length, 1);
+    assert.equal(diagram.tables[0].namespace.catalog, "ANALYTICS");
+    assert.equal(diagram.tables[0].fields[0].type, "NUMBER");
+    assert.equal(diagram.tables[0].fields[0].size, "38,0");
+    assert.equal(diagram.tables[1].fields[1].default, "CURRENT_TIMESTAMP()");
+    assert.deepEqual(Object.keys(diagram).sort(), [
+      "areas",
+      "database",
+      "enums",
+      "notes",
+      "relationships",
+      "tables",
+      "title",
+      "transform",
+      "types",
+    ]);
+    assert.equal(JSON.stringify(diagram).includes("password"), false);
+    assert.equal(exportSQL(diagram), expectedSnowflakeDdl);
+  });
+
+  it("fails loudly for Snowflake DDL outside the supported core import contract", () => {
+    assert.throws(
+      () =>
+        parseSnowflakeDDLToCanonicalProject(
+          "CREATE TABLE ANALYTICS.CORE.EVENTS (PAYLOAD VARIANT);",
+        ),
+      /unsupported type family VARIANT/i,
+    );
+    assert.throws(
+      () =>
+        parseSnowflakeDDLToCanonicalProject(
+          "CREATE TABLE ANALYTICS.CORE.EVENTS (ID NUMBER(38, 0), CONSTRAINT PK_EVENTS PRIMARY KEY (ID) RELY);",
+        ),
+      /RELY/i,
+    );
+    assert.throws(
+      () =>
+        parseSnowflakeDDLToCanonicalProject(
+          'CREATE TABLE ANALYTICS.CORE."Events" (ID NUMBER(38, 0));',
+        ),
+      /quoted identifiers/i,
+    );
   });
 
   it("passes generated Snowflake DDL to the narrow native .sql export bridge", async () => {

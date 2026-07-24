@@ -311,6 +311,74 @@ Use `electron-builder` or equivalent to produce:
 
 Initial packages may be unsigned/not notarized. Signing/notarization is a later release-readiness milestone.
 
+SS-012's unsigned installer configuration uses `electron-builder` in
+`package.json`. `npm run dist:desktop:mac` selects macOS `.dmg` and `.zip`
+targets for Apple Silicon and x64, `npm run dist:desktop:linux` selects the x64
+Linux AppImage target, and `npm run dist:desktop:win` selects distinct x64
+Windows NSIS and portable targets. The Windows targets use different artifact
+names so their `.exe` outputs cannot overwrite each other. Every installer
+script disables publishing and first runs `build:desktop`, which produces the
+relative-asset desktop renderer in `dist-desktop` and the Electron main/preload
+artifacts in `dist-electron`; packaged startup therefore keeps the same local
+`loadFile` path and does not require Vite preview, Python, or a loopback web
+server. macOS application and disk-image signing are disabled for this slice;
+signing and notarization remain a later human-approved milestone.
+
+The 2026-07-15 SS-012 repair keeps Electron and the existing drawDB renderer
+intact while making native packaging resources explicit. Changed files:
+`package.json`, `tests/cross-platform-packaging.test.mjs`, `build/icon.png`,
+`build/icon.ico`, `build/icon.icns`, `docs/desktop-app-project-plan.md`, and
+`docs/desktop-app-sprint-plan.md`. `package.json` now sets
+`build.directories.buildResources` to `build`, uses `build/icon.icns` for
+macOS, `build/icon.png` for Linux, and `build/icon.ico` for Windows, replacing
+the prior Linux use of the wide `drawdb.png` logo as an app icon.
+`tests/cross-platform-packaging.test.mjs` verifies those native icon resources
+by format and size.
+
+Exact checks run for the 2026-07-15 repair:
+`node --test tests/cross-platform-packaging.test.mjs` passed; `npm run test`
+passed 5/5 test files; `npm run lint` passed; `npm run build` passed with the
+existing Vite warnings for direct eval in `lottie-web` and large chunks.
+`npm run package:desktop` was attempted and reached successful
+`build:desktop-renderer` and `build:electron` output, then failed locally with
+`sh: 1: electron-builder: not found` because this checkout's `node_modules`
+does not contain the locked `electron-builder` binary. This is the current
+blocker for local native artifact smoke; `package.json` and `package-lock.json`
+still declare and lock `electron-builder`, so the next recommended item is to
+reinstall locked dependencies on the packaging host and then run the native
+artifact smoke checklist below.
+
+The configuration and deterministic SS-012 tests are complete. SS-012 remains
+in progress until the generated artifacts have been built and the checklist
+below has been recorded on the matching native platforms. A configuration test
+or ordinary renderer/Electron build is not evidence that a macOS DMG, Linux
+AppImage, or Windows installer was successfully produced or launched.
+
+### Installer Smoke Checklist
+
+Run this checklist on each platform after producing the matching unsigned
+package:
+
+- macOS: mount the `.dmg`, copy the app to Applications, launch it, and repeat
+  the checks with the extracted `.zip` app on both configured architectures as
+  available.
+- Linux: mark the AppImage executable and launch it from a clean desktop user
+  session before running the shared checks.
+- Windows: install and uninstall the NSIS package, then launch the separately
+  named portable executable and run the shared checks against both forms.
+
+- Install or launch the generated artifact without starting a terminal server.
+- Confirm the app opens directly to the editor route.
+- Create a small diagram, use Auto Arrange, and verify the canvas updates.
+- Save a `.erd.json` project through the native Save dialog.
+- Quit and reopen the app, then open the saved project through the native Open
+  dialog.
+- Export Snowflake DDL to a `.sql` file through the native export flow.
+- Verify external links open in the system browser instead of navigating inside
+  the editor window.
+- Confirm `LICENSE`, `README.md`, and `THIRD_PARTY_NOTICES.md` are present in
+  the packaged resources or installer notices.
+
 ## License Requirements
 
 Because drawDB is AGPL-3.0, preserve:
@@ -321,7 +389,14 @@ Because drawDB is AGPL-3.0, preserve:
 - local patch history
 - upstream attribution
 
-Any packaged app must include an About/Licenses surface before external distribution.
+The SS-012 configuration includes `LICENSE`, `README.md`, and
+`THIRD_PARTY_NOTICES.md` as bundled resources/source notices through the
+Electron builder file set. Artifact smoke testing must confirm their presence;
+until then, this is configuration evidence rather than package evidence. macOS
+exposes the standard application About role from the native app menu; before
+external distribution, that About/Licenses surface should be expanded into a
+dedicated in-app notice view or native About panel that links users to the
+bundled license, notices, and corresponding source offer.
 
 ## Milestones
 

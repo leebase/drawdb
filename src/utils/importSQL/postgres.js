@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
-import { Cardinality, Constraint, DB } from "../../data/constants";
-import { dbToTypes } from "../../data/datatypes";
-import { buildSQLFromAST } from "./shared";
+import { Cardinality, Constraint, DB } from "../../data/constants.js";
+import { dbToTypes } from "../../data/datatypes.js";
+import { buildSQLFromAST } from "./shared.js";
 
 const affinity = {
   [DB.POSTGRES]: new Proxy(

@@ -251,7 +251,7 @@ Acceptance:
 
 ### SS-012: Cross-Platform Packaging
 
-Status: queued
+Status: in progress (0.1.0 Windows artifact repair verified 2026-07-24; macOS 0.1.0 rebuild/smoke still pending)
 
 Objective: produce unsigned installable packages for macOS, Linux, and Windows.
 
@@ -262,6 +262,193 @@ Acceptance:
 - Windows installer or portable build is configured.
 - Each package has a smoke checklist.
 - License/about/source notice requirements are visible.
+
+Configuration evidence: `package.json` configures `electron-builder` with
+macOS `.dmg` and `.zip` targets for arm64 and x64, an x64 Linux AppImage, and
+distinct x64 Windows NSIS and portable targets while preserving
+`main: dist-electron/main.cjs` and the existing renderer/Electron entry build
+scripts. Separate `-setup.exe` and `-portable.exe` artifact templates prevent
+the two Windows targets from colliding. Installer scripts run `build:desktop`,
+explicitly disable publishing, and keep macOS signing disabled. The installer
+file set includes `dist-desktop`, `dist-electron`, `package.json`, `LICENSE`,
+`README.md`, and `THIRD_PARTY_NOTICES.md`; the same notice files are copied as
+extra resources. The 2026-07-15 repair replaced the wide `drawdb.png` logo as a
+Linux packaging icon with native app icon resources: `build/icon.png`,
+`build/icon.ico`, and `build/icon.icns`, wired through
+`package.json#build.directories.buildResources`, `build.mac.icon`,
+`build.linux.icon`, and `build.win.icon`. `tests/cross-platform-packaging.test.mjs`
+now verifies those icon formats and dimensions. Packaged startup therefore
+continues to load bundled local files and does not require Python, Vite
+preview, or a local web server. The platform-specific smoke checklist and
+license/source notice requirements are recorded in
+`docs/desktop-app-project-plan.md`.
+
+Changed files for the 2026-07-24 0.1.0 packaging slice:
+`package.json`, `package-lock.json`, `tests/cross-platform-packaging.test.mjs`,
+`.gitignore`, and `docs/desktop-app-sprint-plan.md`. `package.json` and
+`package-lock.json` now use release identity `0.1.0`. `package.json` also sets
+`build.linux.syncDesktopName` to `true` while preserving the existing macOS
+DMG/ZIP targets, Linux x64 AppImage target, Windows x64 NSIS target, and
+Windows x64 portable target. `.gitignore` now treats `dist-installers` as
+generated packaging output, matching the Electron Builder output directory.
+
+`tests/cross-platform-packaging.test.mjs` now proves the `0.1.0` identity in
+both package files, the Linux `syncDesktopName: true` setting, the preserved
+Linux AppImage target, the preserved Windows x64 NSIS and portable target
+configuration, and the required real Windows artifact paths:
+`dist-installers/drawDB Desktop-0.1.0-win-x64-setup.exe` and
+`dist-installers/drawDB Desktop-0.1.0-win-x64-portable.exe`. The Windows
+artifact assertions require non-trivial `.exe` files with Windows executable
+headers. The trusted governed-run failure `8623e2b43bad` was the final
+Windows artifact assertion: `fs.statSync` could not find
+`dist-installers/drawDB Desktop-0.1.0-win-x64-setup.exe`. The current
+packaging evidence includes that NSIS installer and the portable executable
+under the existing `dist-installers` layout.
+
+Exact checks run for the 2026-07-24 0.1.0 packaging slice:
+`test -s 'dist-installers/drawDB Desktop-0.1.0-linux-x86_64.AppImage' && file
+'dist-installers/drawDB Desktop-0.1.0-linux-x86_64.AppImage' && ls -lh
+'dist-installers/drawDB Desktop-0.1.0-linux-x86_64.AppImage'` passed and
+verified the existing Linux AppImage as a 174 MB x86-64 ELF executable. Linux
+was not rebuilt. macOS was not rebuilt. The focused package verification
+`node --test tests/cross-platform-packaging.test.mjs` passed after confirming
+both real Windows x64 outputs:
+`dist-installers/drawDB Desktop-0.1.0-win-x64-setup.exe` and
+`dist-installers/drawDB Desktop-0.1.0-win-x64-portable.exe`.
+
+Windows status: repaired for the SS-012 focused artifact gate. The remaining
+SS-012 risk is macOS 0.1.0 native rebuild and host smoke evidence, because the
+available macOS artifacts in `dist-installers` were generated before the
+0.1.0 identity update and were not rebuilt during this repair.
+
+### SS-013: Persistent Multi-Database Connections Menu
+
+Status: complete (governed run `c2c7e492126b`, 2026-07-20)
+
+Objective: replace the single-purpose Snowflake connection dialog with a
+persistent, DBeaver-style Connections menu that manages saved connection
+profiles for every database backend the app already supports, reusable for
+both reverse engineering (import) and forward engineering (deploy/export
+DDL). This generalizes existing connection handling; it does not add a new
+database provider.
+
+Acceptance:
+
+- A "Connections" item exists in the Electron application menu bar alongside
+  File/Edit/Diagram/View/Help.
+- Connection profiles persist locally across app restarts. Secrets use the
+  same OS-backed secure storage already used for Snowflake credentials;
+  credentials are never written to `.erd.json` project files.
+- Profiles are provider-typed. Snowflake and SQLite are the supported
+  provider types, built on the existing provider logic — no new database
+  provider is introduced.
+- A saved connection can be used both to reverse engineer (pull schema
+  metadata into an editable diagram) and to forward engineer (deploy
+  generated DDL back to that connection) where the provider supports each
+  direction.
+- Users can add, edit, duplicate, test, and delete a connection profile from
+  the Connections menu.
+- Existing Snowflake reverse-engineering and DDL export workflows keep
+  working, now routed through a saved connection profile instead of the
+  standalone one-off dialog.
+- Test coverage protects profile CRUD, persistence, and the reverse/forward
+  hand-off for at least the Snowflake provider, using mocked metadata by
+  default (no live credentials required).
+
+### SS-014: Conversational Schema Authoring
+
+Status: complete (rebuilt locally from source and reverified, 2026-07-24;
+original production-provider repair run `d347c5273564`, 2026-07-20)
+
+Objective: let a user describe a data model in natural language and receive a
+visible, editable proposal for tables, columns, keys, and relationships before
+the canonical model is changed.
+
+Acceptance:
+
+- A docked conversational panel accepts natural-language schema requests.
+- Proposed additions and changes render as pending canvas diffs with explicit
+  Accept, Edit, and Reject actions; no LLM response silently mutates the model.
+- Accepted proposals participate in normal undo/history and dirty/save state.
+- The production desktop LLM path crosses an allowlisted Electron IPC/preload
+  boundary.
+- The user can configure the supported LLM API key, and Electron `safeStorage`
+  owns its encrypted lifecycle. The key never enters project files, renderer
+  persistence, logs, fixtures, or snapshots.
+- Offline and provider-error behavior fails safely without corrupting the
+  current diagram.
+- Deterministic mocked-provider tests, the full test suite, lint, build, user
+  smoke, and independent review all pass.
+
+Rebuild evidence (2026-07-24):
+
+- Recreated the logical proposal contract, bounded prompt/request builder,
+  OpenAI Responses API service with strict Structured Outputs, encrypted
+  `safeStorage` credential lifecycle, allowlisted Electron bridge, docked
+  proposal UI, pending canvas diff, explicit Accept/Edit/Reject flow, and
+  undo/redo integration.
+- Verification passed with 146/146 automated tests, ESLint, the production
+  desktop renderer and Electron builds, the real browser workflow, a packaged
+  Electron UI smoke, credential-pattern scanning, and `git diff --check`.
+
+### SS-015: Terraform Round-Trip Engineering
+
+Status: complete (2026-07-24)
+
+Objective: add Terraform as a first-class interchange path so supported
+database structures can be reverse engineered from Terraform HCL into an
+editable ERD and forward engineered from the canonical model into
+deterministic Terraform HCL.
+
+Acceptance:
+
+- The desktop app can select a Terraform file or module directory and import
+  supported database resources into the canonical physical model and editable
+  diagram.
+- Import preserves supported namespaces, tables, ordered columns, primary and
+  unique keys, foreign keys, and derived relationships.
+- The app can generate deterministic Terraform HCL from the current canonical
+  model without bypassing the canonical-model validation boundary.
+- A canonical model exported to Terraform and imported again preserves all
+  supported semantics in deterministic fixture tests.
+- Unsupported resources, expressions, or ambiguous references produce clear,
+  actionable errors; they are never silently dropped.
+- Generated Terraform is previewed and saved for user review. ERD Tool does
+  not automatically run `terraform apply`.
+- Terraform state, provider credentials, backend secrets, and tokens never
+  enter `.erd.json` files, logs, fixtures, or generated test snapshots.
+- Existing database connection, LLM schema-authoring, Snowflake, SQLite,
+  project-file, and DDL workflows remain green.
+
+Closure evidence: `src/erdTool/terraformRoundTrip.js` provides deterministic
+Snowflake Terraform HCL reverse engineering into the canonical physical model
+and editable drawDB diagram, plus deterministic forward engineering from the
+validated canonical model back to Terraform HCL. The supported Terraform
+surface is intentionally constrained to Snowflake databases, schemas, tables,
+columns, primary keys, unique keys, and foreign keys; unsupported resources,
+unsupported expressions, ambiguous references, provider credential blocks,
+backend/state configuration, and `.tfstate`-like JSON are rejected explicitly.
+The 2026-07-24 repair also fixed Terraform default expression classification,
+escaped Terraform template markers in generated strings, rejected Terraform
+Cloud state configuration, removed `.tfvars` from the upload affordance,
+resolved schema database references independent of declaration order, rejected
+explicit table database/schema mismatches, rejected non-string HCL literals in
+string-only Terraform attributes, rejected unsupported nested default and
+foreign-key property block content, and applies the imported Snowflake database
+so Terraform export is reachable after Terraform import.
+The existing import/export UI exposes Snowflake Terraform source import and
+Terraform HCL export without invoking Terraform or persisting state,
+credentials, backend secrets, or tokens. During closure, Electron process
+bundling was also repaired so `node:process` and `node:buffer` remain external
+Node modules instead of browser shims in the production main artifact. Exact
+checks run from the repository root: `node tests/terraform-round-trip.test.mjs`,
+`node tests/electron-runtime.test.mjs`, `npm run test`, `npm run lint`,
+`npm run build`, and `npm run
+build:desktop`; all passed. `npm run build` and `npm run build:desktop`
+retained the existing Vite warnings for `lottie-web` direct eval and large
+chunks. Current structured repair evidence is recorded in
+`code-reviews/review-ss-015-terraform-repair.verdict.json`. No later sprint item
+is defined in this plan yet.
 
 ## Sprint Boundaries
 
@@ -294,6 +481,28 @@ Goal: connect to Snowflake and reverse engineer selected metadata into an editab
 Items: SS-012
 
 Goal: produce installable app artifacts for Mac, Linux, and Windows.
+
+### Sprint 6: Persistent Connections
+
+Items: SS-013
+
+Goal: a DBeaver-style Connections menu manages reusable, persisted connection
+profiles across all supported database providers for both reverse and
+forward engineering.
+
+### Sprint 7: Conversational Schema Authoring
+
+Items: SS-014
+
+Goal: natural-language requests produce safe, reviewable diagram changes with
+secure local LLM credential handling.
+
+### Sprint 8: Terraform Round-Trip Engineering
+
+Items: SS-015
+
+Goal: supported database structures round-trip between Terraform HCL and the
+canonical editable ERD without leaking credentials or applying infrastructure.
 
 ## Ideation Rules For Auto-Orch
 

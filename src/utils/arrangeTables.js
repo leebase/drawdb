@@ -2,7 +2,7 @@ import {
   tableColorStripHeight,
   tableFieldHeight,
   tableHeaderHeight,
-} from "../data/constants";
+} from "../data/constants.js";
 
 export function arrangeTables(diagram) {
   let maxHeight = -1;

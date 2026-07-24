@@ -346,6 +346,14 @@ function isRecognizedSnowflakeDefaultFunction(value) {
   return false;
 }
 
+export function isSnowflakeDefaultExpression(value) {
+  const text = String(value).trim();
+  return (
+    SNOWFLAKE_DEFAULT_KEYWORDS.has(text.toUpperCase()) ||
+    isRecognizedSnowflakeDefaultFunction(text)
+  );
+}
+
 function snowflakeDefaultLiteral(value) {
   const text = String(value).trim();
   const upper = text.toUpperCase();
@@ -354,8 +362,7 @@ function snowflakeDefaultLiteral(value) {
     SNOWFLAKE_NUMERIC_LITERAL_RE.test(text) ||
     upper === "TRUE" ||
     upper === "FALSE" ||
-    SNOWFLAKE_DEFAULT_KEYWORDS.has(upper) ||
-    isRecognizedSnowflakeDefaultFunction(text)
+    isSnowflakeDefaultExpression(text)
   ) {
     return text;
   }
@@ -2191,6 +2198,576 @@ function foreignKeyAlterStatements(model, ddlTables) {
     }
   }
   return statements.sort();
+}
+
+function splitSnowflakeStatements(sql) {
+  const statements = [];
+  let current = "";
+  let depth = 0;
+  let inString = false;
+  for (let index = 0; index < sql.length; index += 1) {
+    const char = sql[index];
+    current += char;
+    if (inString) {
+      if (char === "'" && sql[index + 1] === "'") {
+        current += sql[index + 1];
+        index += 1;
+      } else if (char === "'") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inString = true;
+    } else if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth < 0) fail("unsupported Snowflake DDL: unbalanced parentheses");
+    } else if (char === ";" && depth === 0) {
+      const statement = current.slice(0, -1).trim();
+      if (statement) statements.push(statement);
+      current = "";
+    }
+  }
+  if (inString || depth !== 0) {
+    fail("unsupported Snowflake DDL: unterminated string or parentheses");
+  }
+  const trailing = current.trim();
+  if (trailing) statements.push(trailing);
+  return statements;
+}
+
+function splitSnowflakeTopLevelList(text) {
+  const parts = [];
+  let current = "";
+  let depth = 0;
+  let inString = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      current += char;
+      if (char === "'" && text[index + 1] === "'") {
+        current += text[index + 1];
+        index += 1;
+      } else if (char === "'") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inString = true;
+      current += char;
+    } else if (char === "(") {
+      depth += 1;
+      current += char;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth < 0) fail("unsupported Snowflake DDL: unbalanced list");
+      current += char;
+    } else if (char === "," && depth === 0) {
+      if (!current.trim()) fail("unsupported Snowflake DDL: empty list item");
+      parts.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  if (inString || depth !== 0) {
+    fail("unsupported Snowflake DDL: unterminated list");
+  }
+  if (current.trim()) parts.push(current.trim());
+  return parts;
+}
+
+function sqlStringLiteralValue(value) {
+  const text = String(value).trim();
+  if (!isSingleQuotedSqlLiteral(text)) {
+    fail(`unsupported Snowflake DDL string literal ${JSON.stringify(value)}`);
+  }
+  return text.slice(1, -1).replaceAll("''", "'");
+}
+
+function parseSnowflakeIdentifier(value, label) {
+  const text = String(value).trim();
+  if (
+    !text ||
+    text.length > SNOWFLAKE_IDENTIFIER_MAX_LENGTH ||
+    !/^[A-Z_][A-Z0-9_$]*$/i.test(text)
+  ) {
+    fail(`${label} must be a legal unquoted Snowflake identifier`);
+  }
+  return text.toUpperCase();
+}
+
+function parseQualifiedSnowflakeName(value, expectedParts, label) {
+  const parts = String(value)
+    .trim()
+    .split(".")
+    .map((part) => parseSnowflakeIdentifier(part, label));
+  if (parts.length !== expectedParts) {
+    fail(`${label} must be a ${expectedParts}-part unquoted Snowflake name`);
+  }
+  return parts;
+}
+
+function parseSnowflakeColumnList(value, label) {
+  const columns = splitSnowflakeTopLevelList(value).map((column) =>
+    parseSnowflakeIdentifier(column, label),
+  );
+  if (columns.length === 0) fail(`${label} must be non-empty`);
+  return columns;
+}
+
+function parseSnowflakeDataType(value) {
+  const match = String(value)
+    .trim()
+    .match(/^([A-Z_][A-Z0-9_$]*)(?:\s*\(([^()]*)\))?$/i);
+  if (!match) fail(`unsupported Snowflake data type ${value}`);
+  const family = match[1].toUpperCase();
+  const args =
+    match[2] === undefined
+      ? []
+      : match[2].split(",").map((arg) => arg.trim());
+  let precision = null;
+  let scale = null;
+  let length = null;
+  if (family === "NUMBER") {
+    if (args.length !== 2) fail("NUMBER requires precision and scale");
+    precision = Number(args[0]);
+    scale = Number(args[1]);
+  } else if (family === "VARCHAR" || family === "BINARY") {
+    if (args.length !== 1) fail(`${family} requires length`);
+    length = Number(args[0]);
+  } else if (family === "TIMESTAMP_NTZ") {
+    if (args.length !== 1) fail("TIMESTAMP_NTZ requires precision");
+    precision = Number(args[0]);
+  } else if (family === "DATE" || family === "BOOLEAN" || family === "FLOAT") {
+    if (args.length !== 0) fail(`${family} does not support parameters`);
+  } else {
+    fail(`unsupported type family ${family}`);
+  }
+  if (
+    (precision !== null && !Number.isInteger(precision)) ||
+    (scale !== null && !Number.isInteger(scale)) ||
+    (length !== null && !Number.isInteger(length))
+  ) {
+    fail(`unsupported Snowflake data type ${value}`);
+  }
+  assertTypeBounds(family, { precision, scale, length }, `data type ${family}`);
+  return {
+    family,
+    text: canonicalTypeText(family, { precision, scale, length }),
+    precision,
+    scale,
+    length,
+  };
+}
+
+function isSnowflakeWordBoundary(value, index) {
+  return index < 0 || index >= value.length || !/[A-Z0-9_$]/i.test(value[index]);
+}
+
+function readSnowflakeColumnClause(rest, index) {
+  const remaining = rest.slice(index);
+  const notNull = remaining.match(/^NOT\s+NULL\b/i);
+  if (notNull && isSnowflakeWordBoundary(rest, index - 1)) {
+    return { kind: "NOT_NULL", start: index, end: index + notNull[0].length };
+  }
+  for (const kind of ["DEFAULT", "COMMENT"]) {
+    if (
+      remaining.length >= kind.length &&
+      remaining.slice(0, kind.length).toUpperCase() === kind &&
+      isSnowflakeWordBoundary(rest, index - 1) &&
+      isSnowflakeWordBoundary(rest, index + kind.length)
+    ) {
+      return { kind, start: index, end: index + kind.length };
+    }
+  }
+  return null;
+}
+
+function snowflakeColumnClauseStarts(rest) {
+  const clauses = [];
+  let depth = 0;
+  let inString = false;
+  for (let index = 0; index < rest.length; index += 1) {
+    const char = rest[index];
+    if (inString) {
+      if (char === "'" && rest[index + 1] === "'") {
+        index += 1;
+      } else if (char === "'") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inString = true;
+    } else if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth < 0) fail("unsupported Snowflake column clause: unbalanced parentheses");
+    } else if (depth === 0) {
+      const clause = readSnowflakeColumnClause(rest, index);
+      if (clause) {
+        clauses.push(clause);
+        index = clause.end - 1;
+      }
+    }
+  }
+  if (inString || depth !== 0) {
+    fail("unsupported Snowflake column clause: unterminated string or parentheses");
+  }
+  return clauses;
+}
+
+function unsupportedSnowflakeColumnFeature(rest) {
+  const features = [
+    "PRIMARY",
+    "UNIQUE",
+    "REFERENCES",
+    "CHECK",
+    "COLLATE",
+    "IDENTITY",
+    "AUTOINCREMENT",
+  ];
+  let depth = 0;
+  let inString = false;
+  for (let index = 0; index < rest.length; index += 1) {
+    const char = rest[index];
+    if (inString) {
+      if (char === "'" && rest[index + 1] === "'") {
+        index += 1;
+      } else if (char === "'") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inString = true;
+    } else if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+    } else if (depth === 0) {
+      const remaining = rest.slice(index);
+      const feature = features.find(
+        (candidate) =>
+          remaining.length >= candidate.length &&
+          remaining.slice(0, candidate.length).toUpperCase() === candidate &&
+          isSnowflakeWordBoundary(rest, index - 1) &&
+          isSnowflakeWordBoundary(rest, index + candidate.length),
+      );
+      if (feature) return feature;
+    }
+  }
+  return null;
+}
+
+function parseSnowflakeColumnClauses(rest, columnName) {
+  let nullable = true;
+  let defaultValue = null;
+  let comment = null;
+  const clauses = snowflakeColumnClauseStarts(rest);
+  if (clauses.length === 0) {
+    if (rest.trim()) {
+      fail(`unsupported Snowflake column clause on ${columnName}: ${rest.trim()}`);
+    }
+    return { nullable, defaultValue, comment };
+  }
+  if (rest.slice(0, clauses[0].start).trim()) {
+    fail(
+      `unsupported Snowflake column clause on ${columnName}: ${rest
+        .slice(0, clauses[0].start)
+        .trim()}`,
+    );
+  }
+  clauses.forEach((clause, index) => {
+    const value = rest
+      .slice(clause.end, clauses[index + 1]?.start ?? rest.length)
+      .trim();
+    if (clause.kind === "NOT_NULL") {
+      if (!nullable) fail(`duplicate NOT NULL clause on ${columnName}`);
+      if (value) fail(`unsupported Snowflake column clause on ${columnName}: ${value}`);
+      nullable = false;
+    } else if (clause.kind === "DEFAULT") {
+      if (defaultValue !== null) fail(`duplicate DEFAULT clause on ${columnName}`);
+      if (!value) fail(`DEFAULT for ${columnName} must not be empty`);
+      defaultValue = value;
+    } else if (clause.kind === "COMMENT") {
+      if (comment !== null) fail(`duplicate COMMENT clause on ${columnName}`);
+      if (!isSingleQuotedSqlLiteral(value)) {
+        fail(`unsupported Snowflake column comment on ${columnName}`);
+      }
+      comment = sqlStringLiteralValue(value);
+    }
+  });
+  return { nullable, defaultValue, comment };
+}
+
+function parseSnowflakeColumnDefinition(definition, tableParts, ordinal) {
+  const match = definition.match(
+    /^([A-Z_][A-Z0-9_$]*)\s+([A-Z_][A-Z0-9_$]*(?:\s*\([^)]*\))?)([\s\S]*)$/i,
+  );
+  if (!match) {
+    fail(`unsupported Snowflake column definition ${JSON.stringify(definition)}`);
+  }
+  const [, rawName, rawType, rawRest] = match;
+  const name = parseSnowflakeIdentifier(rawName, "column");
+  if (unsupportedSnowflakeColumnFeature(rawRest)) {
+    fail(`unsupported Snowflake column feature on ${name}`);
+  }
+  const { nullable, defaultValue, comment } = parseSnowflakeColumnClauses(
+    rawRest.trim(),
+    name,
+  );
+
+  const [catalog, schema, tableName] = tableParts;
+  return {
+    id: columnId(catalog, schema, tableName, name),
+    name,
+    ordinal,
+    data_type: parseSnowflakeDataType(rawType),
+    nullable,
+    default: defaultValue,
+    comment,
+  };
+}
+
+function parseSnowflakeInlineConstraint(definition, tableParts, columnsByName) {
+  const match = definition.match(
+    /^CONSTRAINT\s+([A-Z_][A-Z0-9_$]*)\s+(PRIMARY\s+KEY|UNIQUE)\s*\(([\s\S]+)\)\s+NOT\s+ENFORCED$/i,
+  );
+  if (!match) {
+    fail(`unsupported Snowflake table constraint ${JSON.stringify(definition)}`);
+  }
+  const [, rawName, rawKind, rawColumns] = match;
+  const name = parseSnowflakeIdentifier(rawName, "constraint");
+  const columnNames = parseSnowflakeColumnList(rawColumns, "constraint column");
+  const columns = columnNames.map((columnName) => {
+    const column = columnsByName.get(columnName);
+    if (!column) fail(`constraint ${name} references unknown column ${columnName}`);
+    return column.id;
+  });
+  const [catalog, schema, tableName] = tableParts;
+  return {
+    id: constraintId(catalog, schema, tableName, name),
+    name,
+    kind: rawKind.replace(/\s+/g, "_").toLowerCase(),
+    columns,
+    referenced_table_id: null,
+    referenced_columns: [],
+  };
+}
+
+function parseSnowflakeCreateTable(statement) {
+  const match = statement.match(
+    /^CREATE\s+TABLE\s+([A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*)\s*\(([\s\S]*)\)\s*(?:COMMENT\s*=\s*('(?:[^']|'')*'))?$/i,
+  );
+  if (!match) fail(`unsupported Snowflake CREATE TABLE statement`);
+  const [, rawTableName, body, rawComment] = match;
+  const [catalog, schema, name] = parseQualifiedSnowflakeName(
+    rawTableName,
+    3,
+    "table",
+  );
+  const tableParts = [catalog, schema, name];
+  const columns = [];
+  const constraints = [];
+  const columnsByName = new Map();
+  splitSnowflakeTopLevelList(body).forEach((definition) => {
+    if (/^CONSTRAINT\s+/i.test(definition)) {
+      constraints.push(
+        parseSnowflakeInlineConstraint(definition, tableParts, columnsByName),
+      );
+      return;
+    }
+    const column = parseSnowflakeColumnDefinition(
+      definition,
+      tableParts,
+      columns.length + 1,
+    );
+    if (columnsByName.has(column.name)) {
+      fail(`duplicate column ${column.name} in ${name}`);
+    }
+    columnsByName.set(column.name, column);
+    columns.push(column);
+  });
+  if (columns.length === 0) fail(`table ${name} must have columns`);
+  return {
+    namespace: { id: namespaceId(catalog, schema), catalog, schema },
+    table: {
+      id: tableId(catalog, schema, name),
+      namespace_id: namespaceId(catalog, schema),
+      name,
+      kind: "table",
+      columns,
+      constraints,
+      comment: rawComment === undefined ? null : sqlStringLiteralValue(rawComment),
+    },
+  };
+}
+
+function parseSnowflakeForeignKeyAlter(statement, tableByName) {
+  const match = statement.match(
+    /^ALTER\s+TABLE\s+([A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*)\s+ADD\s+CONSTRAINT\s+([A-Z_][A-Z0-9_$]*)\s+FOREIGN\s+KEY\s*\(([\s\S]+?)\)\s+REFERENCES\s+([A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*)\s*\(([\s\S]+?)\)\s+NOT\s+ENFORCED$/i,
+  );
+  if (!match) fail(`unsupported Snowflake ALTER TABLE statement`);
+  const [, rawSource, rawName, rawSourceColumns, rawTarget, rawTargetColumns] =
+    match;
+  const sourceParts = parseQualifiedSnowflakeName(rawSource, 3, "table");
+  const targetParts = parseQualifiedSnowflakeName(rawTarget, 3, "table");
+  const sourceTable = tableByName.get(sourceParts.join("."));
+  const targetTable = tableByName.get(targetParts.join("."));
+  if (!sourceTable || !targetTable) {
+    fail("foreign key references an unknown table");
+  }
+  const sourceColumns = parseSnowflakeColumnList(rawSourceColumns, "foreign key column");
+  const targetColumns = parseSnowflakeColumnList(rawTargetColumns, "referenced column");
+  if (sourceColumns.length !== targetColumns.length) {
+    fail("foreign key column counts must match");
+  }
+  const sourceIds = sourceColumns.map((name) => {
+    const column = sourceTable.columns.find((c) => c.name === name);
+    if (!column) fail(`foreign key references unknown source column ${name}`);
+    return column.id;
+  });
+  const targetIds = targetColumns.map((name) => {
+    const column = targetTable.columns.find((c) => c.name === name);
+    if (!column) fail(`foreign key references unknown target column ${name}`);
+    return column.id;
+  });
+  const name = parseSnowflakeIdentifier(rawName, "constraint");
+  return {
+    sourceTable,
+    constraint: {
+      id: constraintId(sourceParts[0], sourceParts[1], sourceParts[2], name),
+      name,
+      kind: "foreign_key",
+      columns: sourceIds,
+      referenced_table_id: targetTable.id,
+      referenced_columns: targetIds,
+    },
+  };
+}
+
+export function parseSnowflakeDDLToCanonicalProject(sql, options = {}) {
+  if (typeof sql !== "string" || !sql.trim()) {
+    fail("Snowflake DDL must be a nonblank string");
+  }
+  if (/\bRELY\b/i.test(sql)) {
+    fail("unsupported Snowflake DDL: RELY constraints are not imported");
+  }
+  if (/"|`|\[/u.test(sql)) {
+    fail("unsupported Snowflake DDL: quoted identifiers are not imported");
+  }
+  const namespaceById = new Map();
+  const tableByName = new Map();
+  const tables = [];
+  for (const statement of splitSnowflakeStatements(sql)) {
+    if (/^CREATE\s+DATABASE\s+IF\s+NOT\s+EXISTS\s+/i.test(statement)) {
+      const [, catalog] = statement.match(
+        /^CREATE\s+DATABASE\s+IF\s+NOT\s+EXISTS\s+([A-Z_][A-Z0-9_$]*)$/i,
+      ) || [null, null];
+      if (!catalog) fail("unsupported Snowflake CREATE DATABASE statement");
+      parseSnowflakeIdentifier(catalog, "catalog");
+    } else if (/^CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+/i.test(statement)) {
+      const [, rawNamespace] = statement.match(
+        /^CREATE\s+SCHEMA\s+IF\s+NOT\s+EXISTS\s+([A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*)$/i,
+      ) || [null, null];
+      if (!rawNamespace) fail("unsupported Snowflake CREATE SCHEMA statement");
+      const [catalog, schema] = parseQualifiedSnowflakeName(
+        rawNamespace,
+        2,
+        "schema",
+      );
+      namespaceById.set(namespaceId(catalog, schema), {
+        id: namespaceId(catalog, schema),
+        catalog,
+        schema,
+      });
+    } else if (/^CREATE\s+TABLE\s+/i.test(statement)) {
+      const { namespace, table } = parseSnowflakeCreateTable(statement);
+      namespaceById.set(namespace.id, namespace);
+      if (tableByName.has(`${namespace.catalog}.${namespace.schema}.${table.name}`)) {
+        fail(`duplicate table ${namespace.catalog}.${namespace.schema}.${table.name}`);
+      }
+      tableByName.set(`${namespace.catalog}.${namespace.schema}.${table.name}`, table);
+      tables.push(table);
+    } else if (/^ALTER\s+TABLE\s+/i.test(statement)) {
+      const { sourceTable, constraint } = parseSnowflakeForeignKeyAlter(
+        statement,
+        tableByName,
+      );
+      sourceTable.constraints.push(constraint);
+    } else {
+      fail(`unsupported Snowflake DDL statement: ${statement.slice(0, 60)}`);
+    }
+  }
+  const namespaces = sortById([...namespaceById.values()]);
+  const canonicalTables = sortById(
+    tables.map((table) => ({
+      ...table,
+      constraints: sortById(table.constraints),
+    })),
+  );
+  const relationships = sortById(
+    canonicalTables.flatMap((table) => {
+      const namespace = namespaceById.get(table.namespace_id);
+      return table.constraints
+        .filter((constraint) => constraint.kind === "foreign_key")
+        .map((constraint) => ({
+          id: relationshipId(
+            namespace.catalog,
+            namespace.schema,
+            table.name,
+            constraint.name,
+          ),
+          name: constraint.name,
+          source_table_id: table.id,
+          source_column_ids: constraint.columns,
+          target_table_id: constraint.referenced_table_id,
+          target_column_ids: constraint.referenced_columns,
+          cardinality: "many_to_one",
+        }));
+    }),
+  );
+  const physical_model = {
+    model_version: MODEL_VERSION,
+    name:
+      typeof options.name === "string" && options.name.trim()
+        ? options.name.trim()
+        : "snowflake-import",
+    namespaces,
+    tables: canonicalTables,
+    relationships,
+  };
+  validatePhysicalModel(physical_model);
+  const nodes = {};
+  canonicalTables.forEach((table, index) => {
+    nodes[table.id] = fallbackPosition(index);
+  });
+  return {
+    project_version: PROJECT_VERSION,
+    physical_model,
+    diagram_layout: {
+      nodes,
+      viewport: { x: 0, y: 0, zoom: 1 },
+    },
+  };
+}
+
+export function parseSnowflakeDDLToDiagram(sql, options = {}) {
+  const project = parseSnowflakeDDLToCanonicalProject(sql, options);
+  return {
+    ...canonicalProjectToDiagram(project),
+    database: "snowflake",
+    notes: [],
+    areas: [],
+    types: [],
+    enums: [],
+  };
 }
 
 export function renderCanonicalSnowflakeDDL(projectOrModel) {

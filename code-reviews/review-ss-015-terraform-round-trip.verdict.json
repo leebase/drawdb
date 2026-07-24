@@ -1,0 +1,100 @@
+{
+  "schema": "builtin:review_verdict/v1",
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS015-R-001",
+      "severity": "Medium",
+      "file": "src/erdTool/terraformRoundTrip.js",
+      "location": "resolveTableNamespace",
+      "problem": "Historical review finding: an explicit table database that disagreed with a referenced snowflake_schema database was silently overridden.",
+      "proposed_fix": "Reject explicit database/schema mismatches when table schema uses a snowflake_schema reference.",
+      "failure_scenario": "A table with database = \"OTHER_DB\" and schema = snowflake_schema.core.name imported into the CORE namespace without flagging the mismatch."
+    },
+    {
+      "id": "SS015-R-002",
+      "severity": "Medium",
+      "file": "src/erdTool/terraformRoundTrip.js",
+      "location": "buildSchemas",
+      "problem": "Historical review finding: schema-to-schema database references were declaration-order dependent.",
+      "proposed_fix": "Resolve schema references against the full resource graph with cycle detection.",
+      "failure_scenario": "A schema whose database attribute forward-referenced another schema failed solely because the referenced schema appeared later in the module."
+    },
+    {
+      "id": "SS015-R-003",
+      "severity": "Medium",
+      "file": "artifacts/user-smoke/check.log",
+      "location": "SS-015 evidence bundle",
+      "problem": "Historical review finding: the evidence bundle contained npm test output but no lint or production-build log.",
+      "proposed_fix": "Run and record npm run lint and production builds for the repaired tree.",
+      "failure_scenario": "A JSX lint or bundling regression could have been missed by test-only evidence."
+    },
+    {
+      "id": "SS015-R-004",
+      "severity": "Low",
+      "file": "src/components/EditorHeader/Modal/ImportSource.jsx",
+      "location": "Terraform upload accept attribute",
+      "problem": "Historical review finding: the Terraform upload filter advertised .tfvars even though .tfvars files are rejected and often contain secrets.",
+      "proposed_fix": "Advertise only .tf for Terraform HCL upload.",
+      "failure_scenario": "A user could be steered toward selecting a secrets-bearing terraform.tfvars file that cannot produce an importable diagram."
+    },
+    {
+      "id": "SS015-R-005",
+      "severity": "Low",
+      "file": "tests/terraform-round-trip.test.mjs",
+      "location": "preview-only assertions",
+      "problem": "Historical review finding: commandRunner assertions were weak because the exporter does not accept that option.",
+      "proposed_fix": "Keep source-level no-terraform-CLI assertions as the meaningful guard.",
+      "failure_scenario": "The callback-based assertion could not detect Terraform CLI invocation if the function signature ignored the supplied option."
+    },
+    {
+      "id": "SS015-R-006",
+      "severity": "Low",
+      "file": "src/components/EditorHeader/Modal/Modal.jsx",
+      "location": "code export modal",
+      "problem": "Historical review finding: .tf downloads used the generic JSON blob MIME type.",
+      "proposed_fix": "Consider using a Terraform/text MIME type in a later UX polish pass.",
+      "failure_scenario": "The generated file contents were correct, but OS file metadata could identify the download as JSON."
+    },
+    {
+      "id": "SS015-R-007",
+      "severity": "Low",
+      "file": "src/components/EditorHeader/Modal/ImportSource.jsx",
+      "location": "Terraform upload control",
+      "problem": "Historical review finding: module-directory selection was supported programmatically but the web upload control remained single-file.",
+      "proposed_fix": "Add a native directory picker in a later desktop file-bridge increment if required.",
+      "failure_scenario": "A user with a multi-file module would need to provide contents through the programmatic path or combine files manually in the web control."
+    },
+    {
+      "id": "SS015-R-008",
+      "severity": "Low",
+      "file": "src/erdTool/terraformRoundTrip.js",
+      "location": "tokenize",
+      "problem": "Historical review finding: tokenizer errors echoed a raw source fragment.",
+      "proposed_fix": "Use a generic unsupported-token message.",
+      "failure_scenario": "A malformed secret-bearing input could display a small source fragment in the UI error banner."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Historical review check recorded by review-ss-015-terraform-round-trip.md."
+    }
+  ],
+  "lenses": {
+    "historical_companion_notice": {
+      "finding_ids": [
+        "SS015-R-001",
+        "SS015-R-002",
+        "SS015-R-003",
+        "SS015-R-004",
+        "SS015-R-005",
+        "SS015-R-006",
+        "SS015-R-007",
+        "SS015-R-008"
+      ],
+      "justification": "This verdict is the missing structured companion for the historical SS-015 round-trip review markdown. The current repaired-tree verdict is code-reviews/review-ss-015-terraform-repair.verdict.json."
+    }
+  }
+}

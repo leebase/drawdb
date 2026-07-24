@@ -14,7 +14,19 @@ export default defineConfig({
     },
     outDir: "dist-electron",
     rollupOptions: {
-      external: ["electron", "node:fs", "node:path", "node:url"],
+      external: [
+        "electron",
+        "node:crypto",
+        "node:fs",
+        "node:module",
+        "node:os",
+        "node:path",
+        "node:process",
+        "node:url",
+        "node:buffer",
+        "smol-toml",
+        "snowflake-sdk",
+      ],
     },
   },
 });
