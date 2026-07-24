@@ -1,7 +1,7 @@
-import { isFunction, isKeyword, getRelationshipFields } from "../utils";
+import { isFunction, isKeyword, getRelationshipFields } from "../utils.js";
 
-import { DB } from "../../data/constants";
-import { dbToTypes } from "../../data/datatypes";
+import { DB } from "../../data/constants.js";
+import { dbToTypes } from "../../data/datatypes.js";
 
 export function getFkColumnNames(relationship, startTable, endTable) {
   const pairs = getRelationshipFields(relationship);
@@ -31,11 +31,11 @@ export function escapeQuotes(str) {
 }
 
 export function exportFieldComment(comment) {
-  if (comment === "") {
+  if (comment === undefined || comment === null || comment === "") {
     return "";
   }
 
-  return comment
+  return String(comment)
     .split("\n")
     .map((commentLine) => `\t-- ${commentLine}\n`)
     .join("");

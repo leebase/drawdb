@@ -1,0 +1,37 @@
+{
+  "verdict": "pass",
+  "findings": [],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Compiled `scripts/check_web_smoke.py` successfully."
+    }
+  ],
+  "lenses": {
+    "correctness": {
+      "justification": "The mapper consumes mocked INFORMATION_SCHEMA-style structural rows, validates row shapes, filters to BASE TABLE rows, builds namespaces/tables/columns/constraints/relationships, and runs the resulting canonical project through `canonicalProjectToDiagram` before returning it."
+    },
+    "deterministic mapping": {
+      "justification": "Stable ids are derived from catalog/schema/table/column/constraint names, and namespaces, tables, constraints, relationships, and layout positions are sorted or assigned deterministically. The targeted test asserts exact output and repeated conversion equality."
+    },
+    "drawDB model compatibility": {
+      "justification": "The canonical project uses project/model version 1 and the existing physical_model plus diagram_layout shape. The diagram conversion produces drawDB tables, fields, namespace metadata, constraintView data, relationships, transform, and empty notes/areas/types/enums without introducing unexpected fields."
+    },
+    "Snowflake type semantics": {
+      "justification": "The supported mocked scope maps the Snowflake type families already present in drawDB's Snowflake model: NUMBER, FLOAT, VARCHAR, DATE, TIMESTAMP_NTZ, BOOLEAN, and BINARY, including precision, scale, length, and timestamp precision handling compatible with current field-size behavior."
+    },
+    "relationship semantics": {
+      "justification": "Foreign keys become informational many_to_one relationships; composite relationships use Snowflake unique-constraint positions to pair source and target columns. The canonical validator rejects dangling referenced tables, empty referenced columns, length mismatches, and unresolved referenced column ids."
+    },
+    "credential safety": {
+      "justification": "The implementation ignores the mocked connection envelope and serializes only structural metadata. The targeted test verifies password, token, private key, account, warehouse, role, and credential-like keys are absent from the canonical project, diagram, saved project, and reopened diagram."
+    },
+    "regression risk": {
+      "justification": "The change is isolated to the metadata mapper and targeted test, relies on existing adapter validation, and does not add live Snowflake driver, network access, Electron IPC, filesystem, Python runtime, or credential-storage behavior. User-smoke evidence reports app startup and core flow success with check_exit_code 0."
+    },
+    "review environment": {
+      "justification": "The workspace did not expose a functional Git repository for `git status`, so review used direct source/evidence inspection. The only recorded deterministic check was the exact allowlisted compileall command requested."
+    }
+  }
+}

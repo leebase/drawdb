@@ -7,6 +7,7 @@ import { useLiveQuery } from "dexie-react-hooks";
 import Thumbnail from "../components/Thumbnail";
 import logo_light from "../assets/logo_light_160.png";
 import template_screenshot from "../assets/template_screenshot.png";
+import { openRoute } from "../utils/openRoute";
 
 export default function Templates() {
   const defaultTemplates = useLiveQuery(() =>
@@ -22,7 +23,7 @@ export default function Templates() {
   };
 
   const forkTemplate = (id) => {
-    window.open("/editor/templates/" + id, "_blank");
+    openRoute("/editor/templates/" + id);
   };
 
   useEffect(() => {

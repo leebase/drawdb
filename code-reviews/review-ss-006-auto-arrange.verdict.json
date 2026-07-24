@@ -1,0 +1,46 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS006-001",
+      "severity": "Medium",
+      "file": "package.json",
+      "location": "line 16",
+      "problem": "The focused SS-006 regression test file `tests/auto-arrange-desktop.test.mjs` is not included in the repository `test` script, so normal deterministic test runs can pass without exercising the native Auto Arrange menu/channel/renderer contract.",
+      "proposed_fix": "Add `tests/auto-arrange-desktop.test.mjs` to the `test` script, or wire it into an SS-006 verification script that the governed acceptance path actually runs."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Compiled `scripts/check_web_smoke.py` successfully."
+    }
+  ],
+  "lenses": {
+    "native-command wiring": {
+      "justification": "Electron main registers a Diagram > Auto Arrange menu item with `CmdOrCtrl+Shift+L`, sends a fixed `diagram:auto-arrange-request` channel, preload converts it to a fixed renderer event, and the renderer invokes the existing `runAutoLayout` path."
+    },
+    "existing drawDB behavior preservation": {
+      "finding_ids": [
+        "SS006-001"
+      ],
+      "justification": "The toolbar Auto Layout button remains present and both toolbar and native-menu paths converge on the existing renderer layout behavior; the main test wiring omission weakens regression protection for that preservation."
+    },
+    "inactive-diagram safety": {
+      "justification": "The command is a no-op when no Electron window exists or the target window is destroyed, and the renderer returns without mutation for read-only or empty-table diagrams."
+    },
+    "offline operation": {
+      "justification": "The reviewed auto-arrange path uses local Electron menu/preload/renderer code and the bundled ELK layout module, with no runtime network, Python, Vite preview, or child-process dependency added."
+    },
+    "test quality": {
+      "finding_ids": [
+        "SS006-001"
+      ],
+      "justification": "Focused SS-006 tests exist and cover the intended contracts mostly through source-pattern assertions plus a bridge event exercise, but they are not wired into the package test command."
+    },
+    "review environment": {
+      "justification": "The workspace exposed `.git` as a non-functional placeholder, so changed-file discovery used direct source inspection. This is a review-worker limitation and did not reveal a product defect."
+    }
+  }
+}

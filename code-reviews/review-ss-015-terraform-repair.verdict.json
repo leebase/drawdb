@@ -1,0 +1,67 @@
+{
+  "schema": "builtin:review_verdict/v1",
+  "verdict": "pass",
+  "findings": [],
+  "checks_run": [
+    {
+      "command": "node tests/terraform-round-trip.test.mjs",
+      "exit_code": 0,
+      "summary": "Focused SS-015 Terraform suite passed: 11 subtests, 0 failed. Coverage includes default expression classification, escaped Terraform template text, malformed input rejection, non-string literal rejection for string-only attributes, unsupported nested FK/default block rejection, unsupported/ambiguous reference rejection, schema reference order independence, Terraform cloud/backend/state rejection, UI reachability assertions, and existing SQL provider regression checks."
+    },
+    {
+      "command": "node tests/electron-runtime.test.mjs",
+      "exit_code": 0,
+      "summary": "Direct Electron runtime contract passed: 38 subtests, 0 failed."
+    },
+    {
+      "command": "npm run test",
+      "exit_code": 0,
+      "summary": "Full npm test suite passed: 11 test files, 0 failed."
+    },
+    {
+      "command": "npm run lint",
+      "exit_code": 0,
+      "summary": "ESLint completed with max-warnings 0."
+    },
+    {
+      "command": "npm run build",
+      "exit_code": 0,
+      "summary": "Web production build completed. Existing Vite warnings remained for direct eval in lottie-web and large chunks."
+    },
+    {
+      "command": "npm run build:desktop",
+      "exit_code": 0,
+      "summary": "Desktop renderer and Electron main/preload production builds completed. Existing renderer warnings remained for direct eval in lottie-web and large chunks."
+    }
+  ],
+  "lenses": {
+    "deterministic_terraform_hcl_import_and_export": {
+      "finding_ids": [],
+      "justification": "Canonical import/export remains sorted and deterministic. A new schema reference order test proves schema-to-schema database references are resolved against the full resource graph rather than declaration order."
+    },
+    "namespace_table_column_key_and_relationship_preservation": {
+      "finding_ids": [],
+      "justification": "Supported namespaces, tables, columns, keys, relationships, comments and defaults round-trip through the canonical physical model and editable diagram path. The repaired default classifier preserves Snowflake expression defaults such as CURRENT_DATE and NULL while keeping call-shaped literals as constants."
+    },
+    "explicit_rejection_of_unsupported_or_ambiguous_resources": {
+      "finding_ids": [],
+      "justification": "Unsupported resources, unsupported expressions, interpolation, template directives, non-string HCL literals in string-only attributes, unsupported nested default and foreign-key property block content, Terraform cloud/backend/state configuration, provider configuration, and ambiguous table namespace references are rejected with explicit errors."
+    },
+    "preservation_of_existing_drawdb_and_snowflake_behavior": {
+      "finding_ids": [],
+      "justification": "Terraform import/export remains additive. Existing SQL import/export regression checks pass, and the full npm suite passed. Terraform import now applies the Snowflake database value so the export entry is reachable after import."
+    },
+    "prohibitions_on_credentials_terraform_state_terraform_apply_and_python": {
+      "finding_ids": [],
+      "justification": "No Terraform CLI invocation is present or tested as reachable; no terraform apply is run. Provider credentials, backend/cloud state configuration, tfstate-shaped JSON, and .tfvars upload affordance are rejected or avoided. No Python runtime dependency was added."
+    },
+    "test_quality_and_coverage": {
+      "finding_ids": [],
+      "justification": "The Terraform suite now includes targeted regressions for the prior default-classification failure, Terraform template escaping, schema order independence, explicit database/schema mismatch rejection, non-string attribute literals, unsupported nested FK/default blocks, cloud state configuration rejection, and UI database switching."
+    },
+    "review_environment_and_evidence_scope": {
+      "finding_ids": [],
+      "justification": "Review evidence includes focused Terraform tests, full npm test suite, lint, web production build, and desktop production build on the repaired tree."
+    }
+  }
+}

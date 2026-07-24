@@ -1,0 +1,22 @@
+{
+  "verdict": "pass",
+  "findings": [],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Compiled scripts/check_web_smoke.py successfully with no Python syntax error."
+    }
+  ],
+  "lenses": {
+    "snowflake_function_anchoring": {
+      "justification": "src/erdTool/projectAdapter.js now walks recognized function calls by parenthesis depth and only accepts the call when the matching closing parenthesis is the final trimmed character, preventing prefix-only and trailing-token matches from being emitted as executable defaults."
+    },
+    "focused_regression_tests": {
+      "justification": "tests/test-snowflake-ddl-export.test.mjs covers executable supported defaults including CURRENT_TIMESTAMP(), UUID_STRING(), TO_DATE(...), spaced current_timestamp( ), and nested DATEADD(...), plus quoted ambiguous cases for CURRENT_TIMESTAMPED(), trailing tokens, extra closing parentheses, cast suffixes, and malformed calls."
+    },
+    "smoke_evidence": {
+      "justification": "artifacts/user-smoke/result.json shows app_started true, core_flow_completed true, check_exit_code 0, and an empty blocking_errors array; start_exit_code -15 is consistent with a terminated smoke server rather than a blocking user-flow error."
+    }
+  }
+}

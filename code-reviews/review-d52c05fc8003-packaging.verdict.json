@@ -1,0 +1,46 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "RPKG-001",
+      "severity": "Low",
+      "file": "artifacts/user-smoke/result.json",
+      "location": "lines 2-6",
+      "problem": "The successful smoke result proves application startup and the core web flow but contains no native platform, installer-build, or packaged-Electron launch evidence.",
+      "proposed_fix": "Retain this result as web-regression evidence and record matching-host artifact builds plus the documented installer smoke checklist for macOS, Linux, and Windows before marking SS-012 complete."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall -q scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Python compiled scripts/check_web_smoke.py quietly and exited successfully with no output."
+    }
+  ],
+  "lenses": {
+    "packaging correctness": {
+      "justification": "The repaired lockfile resolves electron-builder and its dependency graph, the package scripts build bundled desktop assets before packaging, and each supported platform has explicit non-publishing targets."
+    },
+    "test adequacy": {
+      "justification": "The targeted test now checks both agreement between the root lockfile declaration and package.json and the presence of the resolved electron-builder package entry; saved evidence reports all five focused tests passing."
+    },
+    "user smoke evidence": {
+      "finding_ids": [
+        "RPKG-001"
+      ],
+      "justification": "The supplied result records successful startup, core flow, and check completion without blocking errors, but it is web-baseline evidence rather than native-installer evidence."
+    },
+    "cross-platform scope": {
+      "justification": "macOS arm64/x64 DMG and ZIP, Linux x64 AppImage, and Windows x64 NSIS and portable targets are explicit, with unique Windows artifact names."
+    },
+    "offline runtime and security": {
+      "justification": "Packaged startup uses bundled renderer and Electron outputs without Python or a loopback server; publishing is disabled and the packaging configuration embeds no credential source."
+    },
+    "licensing and notices": {
+      "justification": "LICENSE, README.md, and THIRD_PARTY_NOTICES.md are included in the packaged file set and copied into packaged resources, with installed visibility correctly deferred to native smoke."
+    },
+    "review environment": {
+      "justification": "The workspace is not a functional Git worktree and its existing node_modules is stale relative to the repaired lockfile, so provenance and a live packager invocation were not claimed; direct final-tree and saved-evidence inspection support the verdict."
+    }
+  }
+}

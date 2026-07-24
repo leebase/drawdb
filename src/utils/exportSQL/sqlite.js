@@ -3,9 +3,9 @@ import {
   getInlineFK,
   parseDefault,
   uniqueConstraintClause,
-} from "./shared";
+} from "./shared.js";
 
-import { dbToTypes } from "../../data/datatypes";
+import { dbToTypes } from "../../data/datatypes.js";
 
 export function toSqlite(diagram) {
   return diagram.tables

@@ -1,0 +1,48 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS008-MED-001",
+      "severity": "Medium",
+      "file": "src/components/EditorHeader/Modal/Modal.jsx",
+      "location": "line 137",
+      "problem": "The source-import modal ignores the `database` value returned by `importSQL`. When Snowflake is selected from the generic import-source menu, the parsed tables and relationships are loaded but the active app database remains `generic`, so subsequent editing/export flows can treat the Snowflake model as a generic diagram despite the importer returning `database: \"snowflake\"`.",
+      "proposed_fix": "When importing from `DB.GENERIC` and the imported diagram declares a concrete database, update the active database to that value before or with loading the imported diagram; add an integration/UI test that selects Snowflake from the generic source-import menu and verifies the active database becomes Snowflake."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Compiled scripts/check_web_smoke.py successfully."
+    }
+  ],
+  "lenses": {
+    "correctness": {
+      "finding_ids": [
+        "SS008-MED-001"
+      ]
+    },
+    "preservation_of_existing_database_import_behavior": {
+      "justification": "Non-Snowflake branches in importSQL still dispatch to their existing AST-based importers with the existing diagramDb argument, and the targeted test verifies a MySQL AST import remains intact."
+    },
+    "model_fidelity": {
+      "finding_ids": [
+        "SS008-MED-001"
+      ],
+      "justification": "The parser maps the supported DDL subset into Snowflake namespaces, typed fields, primary/unique constraints, and foreign-key relationships, but the UI import path can leave that model under the generic active database."
+    },
+    "error_handling": {
+      "justification": "Unsupported quoted identifiers, unsupported type families, unknown referenced tables, and malformed DDL are converted into explicit Error messages rather than TypeError-style crashes in the targeted integration test."
+    },
+    "offline_operation": {
+      "justification": "The reviewed DDL import path uses local parsing and project conversion only; no network, browser fetch, or external service calls are involved."
+    },
+    "credential_safety": {
+      "justification": "The DDL importer accepts SQL text and emits diagram structures only; no Snowflake account, warehouse, role, token, password, private key, or connection envelope is read or serialized."
+    },
+    "targeted_test_and_user_smoke_evidence": {
+      "justification": "The targeted integration test covers menu exposure, existing MySQL import preservation, Snowflake mapping, and malformed-input errors. The inspected user-smoke result reports app_started true, core_flow_completed true, check_exit_code 0, and no blocking_errors."
+    }
+  }
+}

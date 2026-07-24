@@ -4,8 +4,8 @@ import {
   parseDefault,
   uniqueConstraintClause,
   getFkColumnNames,
-} from "./shared";
-import { dbToTypes } from "../../data/datatypes";
+} from "./shared.js";
+import { dbToTypes } from "../../data/datatypes.js";
 
 export function toPostgres(diagram) {
   const enumStatements = diagram.enums

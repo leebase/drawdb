@@ -1,0 +1,52 @@
+{
+  "verdict": "pass",
+  "findings": [
+    {
+      "id": "SS007-MED-001",
+      "severity": "Medium",
+      "file": "src/erdTool/projectAdapter.js",
+      "location": "src/erdTool/projectAdapter.js:2360",
+      "problem": "Snowflake column clause extraction searches for ` COMMENT ` and ` DEFAULT ` with plain substring matching, not SQL string awareness. A generated supported default such as `DEFAULT 'needs COMMENT review'` is interpreted as the start of a real COMMENT clause and import fails, breaking generated-DDL round-trip parity for valid string defaults that contain clause words.",
+      "proposed_fix": "Replace extractSnowflakeClause with a scanner that tracks single-quoted string state and parentheses depth before matching top-level clause keywords, then add round-trip tests for string defaults/comments containing COMMENT and DEFAULT tokens."
+    }
+  ],
+  "checks_run": [
+    {
+      "command": "python3 -m compileall scripts/check_web_smoke.py",
+      "exit_code": 0,
+      "summary": "Compiled scripts/check_web_smoke.py successfully."
+    }
+  ],
+  "lenses": {
+    "correctness": {
+      "finding_ids": [
+        "SS007-MED-001"
+      ],
+      "justification": "Core export/import is deterministic for covered fixtures, but SQL clause parsing is not string-aware for supported string defaults."
+    },
+    "preservation_of_existing_drawdb_database_targets": {
+      "justification": "The dispatcher preserves existing database branches and recorded tests include a SQLite regression under the Snowflake suite."
+    },
+    "offline_behavior": {
+      "justification": "The reviewed core and desktop export path use local JavaScript/TypeScript conversion, Electron IPC, and file dialogs; no network connector or service call is required."
+    },
+    "absence_of_python_runtime_dependency": {
+      "justification": "Application Snowflake code paths do not invoke Python; Python appears only in smoke helper scripts and the required review compile check."
+    },
+    "credential_safety": {
+      "justification": "Credential-like project keys are rejected by validators, import-to-diagram output is secret-free, and existing evidence covers credential rejection and shadowed secret normalization."
+    },
+    "test_quality": {
+      "finding_ids": [
+        "SS007-MED-001"
+      ],
+      "justification": "Coverage is broad across render/import/native bridge/negative cases, but it misses clause-keyword strings inside otherwise supported defaults."
+    },
+    "scope_discipline": {
+      "justification": "The implementation remains scoped to Snowflake core parity, preserves unsupported-feature rejection, and avoids broad runtime or dependency expansion."
+    },
+    "user_smoke_evidence": {
+      "justification": "Existing smoke evidence records app_started true, core_flow_completed true, check_exit_code 0, and no blocking errors; this was inspected separately from checks_run."
+    }
+  }
+}

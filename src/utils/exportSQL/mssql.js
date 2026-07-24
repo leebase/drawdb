@@ -3,10 +3,10 @@ import {
   escapeQuotes,
   uniqueConstraintClause,
   getFkColumnNames,
-} from "./shared";
+} from "./shared.js";
 
-import { dbToTypes } from "../../data/datatypes";
-import { DB } from "../../data/constants";
+import { dbToTypes } from "../../data/datatypes.js";
+import { DB } from "../../data/constants.js";
 
 function generateAddExtendedPropertySQL(value, level1name, level2name = null) {
   if (!value || value.trim() === "") {

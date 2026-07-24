@@ -1,7 +1,7 @@
 import { nanoid } from "nanoid";
-import { Cardinality, DB } from "../../data/constants";
-import { dbToTypes } from "../../data/datatypes";
-import { buildSQLFromAST } from "./shared";
+import { Cardinality, DB } from "../../data/constants.js";
+import { dbToTypes } from "../../data/datatypes.js";
+import { buildSQLFromAST } from "./shared.js";
 
 const affinity = {
   [DB.MSSQL]: new Proxy(

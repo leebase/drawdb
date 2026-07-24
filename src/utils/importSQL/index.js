@@ -1,11 +1,12 @@
-import { DB } from "../../data/constants";
-import { arrangeTables } from "../arrangeTables";
-import { fromMariaDB } from "./mariadb";
-import { fromMSSQL } from "./mssql";
-import { fromMySQL } from "./mysql";
-import { fromOracleSQL } from "./oraclesql";
-import { fromPostgres } from "./postgres";
-import { fromSQLite } from "./sqlite";
+import { DB } from "../../data/constants.js";
+import { arrangeTables } from "../arrangeTables.js";
+import { fromMariaDB } from "./mariadb.js";
+import { fromMSSQL } from "./mssql.js";
+import { fromMySQL } from "./mysql.js";
+import { fromOracleSQL } from "./oraclesql.js";
+import { fromPostgres } from "./postgres.js";
+import { fromSnowflake } from "./snowflake.js";
+import { fromSQLite } from "./sqlite.js";
 
 export function importSQL(ast, toDb = DB.MYSQL, diagramDb = DB.GENERIC) {
   let diagram;
@@ -27,6 +28,9 @@ export function importSQL(ast, toDb = DB.MYSQL, diagramDb = DB.GENERIC) {
       break;
     case DB.ORACLESQL:
       diagram = fromOracleSQL(ast, diagramDb);
+      break;
+    case DB.SNOWFLAKE:
+      diagram = fromSnowflake(ast);
       break;
     default:
       diagram = { tables: [], relationships: [] };
