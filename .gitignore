@@ -32,3 +32,8 @@ __pycache__/
 # Auto-orch governed-run artifacts (Linux workspace only)
 .agent-orch/
 .agent-orch-scratch/
+
+# Cross-platform sync metadata and local build spillover
+._*
+/main.cjs
+artifacts/user-smoke/*.log

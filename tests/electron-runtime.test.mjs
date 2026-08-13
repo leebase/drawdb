@@ -701,6 +701,10 @@ describe("SS-004 native project file bridge contract", () => {
       "connections:test",
       "connections:update",
       "ddl:export",
+      "llm:clear-api-key",
+      "llm:propose-schema",
+      "llm:set-api-key",
+      "llm:status",
       "project:open",
       "project:save",
       "project:save-as",
@@ -723,15 +727,17 @@ describe("SS-004 native project file bridge contract", () => {
     assert.deepEqual(Object.keys(desktopApi).sort(), [
       "connections",
       "ddlExport",
+      "llm",
       "projectFiles",
       "runtimeVersion",
       "snowflake",
     ]);
-    assert.equal(desktopApi.runtimeVersion, 3);
+    assert.equal(desktopApi.runtimeVersion, 4);
     assert.equal(Object.isFrozen(desktopApi.projectFiles), true);
     assert.equal(Object.isFrozen(desktopApi.ddlExport), true);
     assert.equal(Object.isFrozen(desktopApi.connections), true);
     assert.equal(Object.isFrozen(desktopApi.snowflake), true);
+    assert.equal(Object.isFrozen(desktopApi.llm), true);
     assert.deepEqual(Object.keys(desktopApi.ddlExport), ["save"]);
     assert.deepEqual(Object.keys(desktopApi.connections).sort(), [
       "create",
@@ -755,6 +761,12 @@ describe("SS-004 native project file bridge contract", () => {
       "listSchemas",
       "listTables",
       "reverseEngineer",
+    ]);
+    assert.deepEqual(Object.keys(desktopApi.llm).sort(), [
+      "clearApiKey",
+      "proposeSchema",
+      "setApiKey",
+      "status",
     ]);
     assert.equal("invoke" in desktopApi, false);
     assert.equal("ipcRenderer" in desktopApi, false);
@@ -810,6 +822,18 @@ describe("SS-004 native project file bridge contract", () => {
       tables: ["ARTIST"],
     });
     await desktopApi.snowflake.disconnect("session-1");
+    await desktopApi.llm.status();
+    await desktopApi.llm.setApiKey("unit-test-key");
+    await desktopApi.llm.proposeSchema({
+      prompt: "Create a customer table",
+      database: "snowflake",
+      currentModel: {
+        summary: "Current diagram",
+        tables: [],
+        relationships: [],
+      },
+    });
+    await desktopApi.llm.clearApiKey();
     assert.deepEqual(invocations, [
       { channel: "project:open", payload: undefined },
       { channel: "project:save", payload: saveRequest },
@@ -863,6 +887,24 @@ describe("SS-004 native project file bridge contract", () => {
         channel: "snowflake:disconnect",
         payload: { sessionId: "session-1" },
       },
+      { channel: "llm:status", payload: undefined },
+      {
+        channel: "llm:set-api-key",
+        payload: { apiKey: "unit-test-key" },
+      },
+      {
+        channel: "llm:propose-schema",
+        payload: {
+          prompt: "Create a customer table",
+          database: "snowflake",
+          currentModel: {
+            summary: "Current diagram",
+            tables: [],
+            relationships: [],
+          },
+        },
+      },
+      { channel: "llm:clear-api-key", payload: undefined },
     ]);
   });
 

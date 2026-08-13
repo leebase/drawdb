@@ -13,6 +13,7 @@ import { pathToFileURL } from "node:url";
 import { canonicalProjectToDiagram } from "../erdTool/projectAdapter.js";
 import { createConnectionProfileStore } from "./connectionProfiles.js";
 import { createSnowflakeService } from "./snowflakeService.js";
+import { createLlmService } from "./llmService.js";
 
 const electronOutputDirectory = __dirname;
 const preloadPath = path.join(electronOutputDirectory, "preload.cjs");
@@ -45,6 +46,10 @@ const snowflakeService = createSnowflakeService({
   },
   savedProfileResolver: (profileId: string) =>
     connectionProfileStore.resolveSnowflakeConnection(profileId),
+});
+const llmService = createLlmService({
+  app,
+  safeStorage,
 });
 
 type ProjectSaveRequest = {
@@ -449,6 +454,25 @@ function registerSnowflakeHandlers(): void {
   });
 }
 
+function registerLlmHandlers(): void {
+  ipcMain.handle("llm:status", (event) => {
+    assertTrustedProjectSender(event);
+    return llmService.status();
+  });
+  ipcMain.handle("llm:set-api-key", (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return llmService.setApiKey(payload);
+  });
+  ipcMain.handle("llm:clear-api-key", (event) => {
+    assertTrustedProjectSender(event);
+    return llmService.clearApiKey();
+  });
+  ipcMain.handle("llm:propose-schema", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return await llmService.propose(payload);
+  });
+}
+
 function sendAutoArrangeToActiveDiagram(): void {
   const window =
     BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -611,6 +635,7 @@ app.whenReady().then(() => {
   registerDdlExportHandler();
   registerConnectionProfileHandlers();
   registerSnowflakeHandlers();
+  registerLlmHandlers();
   registerApplicationMenu();
   createWindow();
 

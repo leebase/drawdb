@@ -357,7 +357,8 @@ Acceptance:
 
 ### SS-014: Conversational Schema Authoring
 
-Status: complete (production-provider repair run `d347c5273564`, 2026-07-20)
+Status: complete (rebuilt locally from source and reverified, 2026-07-24;
+original production-provider repair run `d347c5273564`, 2026-07-20)
 
 Objective: let a user describe a data model in natural language and receive a
 visible, editable proposal for tables, columns, keys, and relationships before
@@ -378,6 +379,17 @@ Acceptance:
   current diagram.
 - Deterministic mocked-provider tests, the full test suite, lint, build, user
   smoke, and independent review all pass.
+
+Rebuild evidence (2026-07-24):
+
+- Recreated the logical proposal contract, bounded prompt/request builder,
+  OpenAI Responses API service with strict Structured Outputs, encrypted
+  `safeStorage` credential lifecycle, allowlisted Electron bridge, docked
+  proposal UI, pending canvas diff, explicit Accept/Edit/Reject flow, and
+  undo/redo integration.
+- Verification passed with 146/146 automated tests, ESLint, the production
+  desktop renderer and Electron builds, the real browser workflow, a packaged
+  Electron UI smoke, credential-pattern scanning, and `git diff --check`.
 
 ### SS-015: Terraform Round-Trip Engineering
 

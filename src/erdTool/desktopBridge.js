@@ -32,6 +32,10 @@ function connectionsApi() {
   return globalThis.window?.drawdbDesktop?.connections ?? null;
 }
 
+function llmApi() {
+  return globalThis.window?.drawdbDesktop?.llm ?? null;
+}
+
 function saveRequest(diagram) {
   const project = diagramToCanonicalProject(diagram);
   let basename = "erd-project";
@@ -79,6 +83,59 @@ export function hasDesktopConnections() {
       api?.test &&
       api?.forwardEngineer,
   );
+}
+
+export function hasDesktopLlm() {
+  const api = llmApi();
+  return Boolean(
+    api?.status &&
+      api?.setApiKey &&
+      api?.clearApiKey &&
+      api?.proposeSchema,
+  );
+}
+
+function requireLlmApi() {
+  const api = llmApi();
+  if (!hasDesktopLlm()) {
+    throw new Error(
+      "Conversational schema authoring is available in the desktop app",
+    );
+  }
+  return api;
+}
+
+export async function getDesktopLlmStatus() {
+  const status = await requireLlmApi().status();
+  if (
+    !status ||
+    typeof status.configured !== "boolean" ||
+    typeof status.model !== "string"
+  ) {
+    throw new Error("Schema provider returned an invalid status");
+  }
+  return status;
+}
+
+export async function setDesktopLlmApiKey(apiKey) {
+  return requireLlmApi().setApiKey(apiKey);
+}
+
+export async function clearDesktopLlmApiKey() {
+  return requireLlmApi().clearApiKey();
+}
+
+export async function proposeDesktopSchema(request) {
+  const result = await requireLlmApi().proposeSchema(request);
+  if (
+    !result ||
+    typeof result !== "object" ||
+    !result.proposal ||
+    typeof result.model !== "string"
+  ) {
+    throw new Error("Schema provider returned an invalid proposal");
+  }
+  return result;
 }
 
 function requireConnectionsApi() {

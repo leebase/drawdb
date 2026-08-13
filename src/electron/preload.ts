@@ -75,6 +75,18 @@ const snowflake = Object.freeze({
   }) => ipcRenderer.invoke("snowflake:reverse-engineer", request),
 });
 
+const llm = Object.freeze({
+  status: () => ipcRenderer.invoke("llm:status"),
+  setApiKey: (apiKey: string) =>
+    ipcRenderer.invoke("llm:set-api-key", { apiKey }),
+  clearApiKey: () => ipcRenderer.invoke("llm:clear-api-key"),
+  proposeSchema: (request: {
+    prompt: string;
+    database: string;
+    currentModel: Record<string, unknown>;
+  }) => ipcRenderer.invoke("llm:propose-schema", request),
+});
+
 ipcRenderer.on(autoArrangeChannel, () => {
   window.dispatchEvent(new Event(autoArrangeEvent));
 });
@@ -91,10 +103,11 @@ ipcRenderer.on(connectionForwardEngineerChannel, () => {
 contextBridge.exposeInMainWorld(
   "drawdbDesktop",
   Object.freeze({
-    runtimeVersion: 3,
+    runtimeVersion: 4,
     projectFiles,
     ddlExport,
     connections,
     snowflake,
+    llm,
   }),
 );

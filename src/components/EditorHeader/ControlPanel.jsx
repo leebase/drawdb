@@ -259,7 +259,10 @@ export default function ControlPanel({
       }
       setRedoStack((prev) => [...prev, a]);
     } else if (a.action === Action.EDIT) {
-      if (a.element === ObjectType.AREA) {
+      if (a.component === "conversational_schema") {
+        setTables(a.undo.tables);
+        setRelationships(a.undo.relationships);
+      } else if (a.element === ObjectType.AREA) {
         updateArea(a.aid, a.undo);
       } else if (a.element === ObjectType.NOTE) {
         updateNote(a.nid, a.undo);
@@ -458,7 +461,10 @@ export default function ControlPanel({
       }
       setUndoStack((prev) => [...prev, a]);
     } else if (a.action === Action.EDIT) {
-      if (a.element === ObjectType.AREA) {
+      if (a.component === "conversational_schema") {
+        setTables(a.redo.tables);
+        setRelationships(a.redo.relationships);
+      } else if (a.element === ObjectType.AREA) {
         updateArea(a.aid, a.redo);
       } else if (a.element === ObjectType.NOTE) {
         updateNote(a.nid, a.redo);
