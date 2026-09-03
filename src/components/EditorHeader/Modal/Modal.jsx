@@ -308,13 +308,30 @@ export default function Modal({
               {modal === MODAL.IMG ? (
                 <Image src={exportData.data} alt="Diagram" height={280} />
               ) : (
-                <CodeEditor
-                  height={360}
-                  value={exportData.data}
-                  language={extensionToLanguage[exportData.extension]}
-                  options={{ readOnly: true }}
-                  showCopyButton={true}
-                />
+                <>
+                  {exportData.subtitle && (
+                    <div className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+                      {exportData.subtitle}
+                    </div>
+                  )}
+                  {exportData.extension === "sql" && (
+                    <pre
+                      data-testid="erd-ddl-output"
+                      className="sr-only"
+                    >
+                      {exportData.data}
+                    </pre>
+                  )}
+                  <div>
+                    <CodeEditor
+                      height={360}
+                      value={exportData.data}
+                      language={extensionToLanguage[exportData.extension]}
+                      options={{ readOnly: true }}
+                      showCopyButton={true}
+                    />
+                  </div>
+                </>
               )}
               <div className="text-sm font-semibold mt-2">{t("filename")}:</div>
               <Input
@@ -368,6 +385,7 @@ export default function Modal({
           extension: "",
           filename: `${title}_${new Date().toISOString()}`,
           nativeDdl: false,
+          subtitle: "",
         }));
         setError({
           type: STATUS.NONE,

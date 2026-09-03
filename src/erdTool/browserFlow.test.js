@@ -306,6 +306,13 @@ describe("ERD Tool browser flow", { timeout: 180000 }, () => {
         await page.waitForTimeout(1500);
 
         await page.getByTestId("erd-show-ddl").click();
+        await page.waitForFunction(
+          () => {
+            const el = document.querySelector('[data-testid="erd-ddl-output"]');
+            return el && el.innerText.includes("CREATE SCHEMA");
+          },
+          { timeout: 15000 },
+        );
         const ddl = await page.getByTestId("erd-ddl-output").innerText();
         assert.match(ddl, /CREATE SCHEMA IF NOT EXISTS ANALYTICS\.CORE;/);
         assert.match(ddl, /CREATE SCHEMA IF NOT EXISTS ANALYTICS\.MART;/);
@@ -317,7 +324,7 @@ describe("ERD Tool browser flow", { timeout: 180000 }, () => {
         await page
           .locator(".semi-modal")
           .filter({ has: page.getByTestId("erd-ddl-output") })
-          .getByRole("button", { name: /^close$/i })
+          .getByRole("button", { name: /^cancel$/i })
           .click();
 
         const downloadPromise = page.waitForEvent("download", {

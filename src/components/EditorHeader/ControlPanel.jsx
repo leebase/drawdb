@@ -123,6 +123,7 @@ export default function ControlPanel({
     filename: `${title}_${new Date().toISOString()}`,
     extension: "",
     nativeDdl: false,
+    subtitle: "",
   });
 
   const openExportModal = (modalType) => {
@@ -130,6 +131,7 @@ export default function ControlPanel({
       ...prev,
       filename: `${title}_${new Date().toISOString()}`,
       nativeDdl: false,
+      subtitle: "",
     }));
     setModal(modalType);
   };
@@ -185,6 +187,36 @@ export default function ControlPanel({
       if (!result?.canceled) {
         Toast.success("Snowflake DDL exported");
       }
+    } catch (error) {
+      Toast.error(error?.message || "Failed to export Snowflake DDL");
+    }
+  };
+
+  // Shared Snowflake DDL export handler: if (database === DB.SNOWFLAKE)
+  const exportSnowflakeDdl = () => {
+    try {
+      const diagram = {
+        database: DB.SNOWFLAKE,
+        title,
+        tables,
+        relationships,
+        references: relationships,
+        types,
+        enums,
+        transform,
+      };
+      const src = exportSQL(diagram);
+      if (!src || !String(src).trim()) {
+        throw new Error("Snowflake export produced empty DDL");
+      }
+      openExportModal(MODAL.CODE);
+      setExportData((prev) => ({
+        ...prev,
+        data: src,
+        extension: "sql",
+        nativeDdl: hasDesktopDdlExport(),
+        subtitle: "PK/FK constraints are informational (NOT ENFORCED)",
+      }));
     } catch (error) {
       Toast.error(error?.message || "Failed to export Snowflake DDL");
     }
@@ -1332,31 +1364,7 @@ export default function ControlPanel({
         function: async () => {
           if (database === DB.GENERIC) return;
           if (database === DB.SNOWFLAKE) {
-            try {
-              const diagram = {
-                database,
-                title,
-                tables,
-                relationships,
-                references: relationships,
-                types,
-                enums,
-                transform,
-              };
-              const src = exportSQL(diagram);
-              if (!src || !String(src).trim()) {
-                throw new Error("Snowflake export produced empty DDL");
-              }
-              openExportModal(MODAL.CODE);
-              setExportData((prev) => ({
-                ...prev,
-                data: src,
-                extension: "sql",
-                nativeDdl: hasDesktopDdlExport(),
-              }));
-            } catch (error) {
-              Toast.error(error?.message || "Failed to export Snowflake DDL");
-            }
+            exportSnowflakeDdl();
             return;
           }
           openExportModal(MODAL.CODE);
@@ -1925,6 +1933,7 @@ export default function ControlPanel({
                 setTitle={setTitle}
                 isNativeDocument={isNativeDocument}
                 onNativeDocumentChange={onNativeDocumentChange}
+                onShowDdl={exportSnowflakeDdl}
               />
               {!isTemplate && (
                 <Button

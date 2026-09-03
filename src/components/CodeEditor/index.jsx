@@ -31,7 +31,11 @@ export default function CodeEditor({
   const handleEditorMount = (editor, monaco) => {
     setUpDBML(monaco, database);
     setTimeout(() => {
-      editor.getAction("editor.action.formatDocument").run();
+      try {
+        editor?.getAction?.("editor.action.formatDocument")?.run?.();
+      } catch {
+        // editor may be unmounted or disposed
+      }
     }, 300);
   };
 

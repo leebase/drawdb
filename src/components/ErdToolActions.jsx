@@ -18,7 +18,6 @@ import { exportSQL } from "../utils/exportSQL";
 import {
   canonicalProjectToDiagram,
   diagramToCanonicalProject,
-  renderCanonicalSnowflakeDDL,
   toSnowflakeIdentifier,
 } from "../erdTool/projectAdapter";
 import { layoutDiagram } from "../erdTool/elkLayout";
@@ -70,6 +69,7 @@ export default function ErdToolActions({
   setTitle,
   isNativeDocument,
   onNativeDocumentChange,
+  onShowDdl,
 }) {
   const {
     tables,
@@ -91,8 +91,6 @@ export default function ErdToolActions({
   const fileInputRef = useRef(null);
   const saveProjectRef = useRef(null);
   const [layoutRunning, setLayoutRunning] = useState(false);
-  const [ddlVisible, setDdlVisible] = useState(false);
-  const [ddlText, setDdlText] = useState("");
   const [openVisible, setOpenVisible] = useState(false);
   const [projectText, setProjectText] = useState("");
   const [snowflakeVisible, setSnowflakeVisible] = useState(false);
@@ -510,19 +508,7 @@ export default function ErdToolActions({
   ]);
 
   const showDdl = () => {
-    try {
-      const project = diagramToCanonicalProject({
-        title,
-        tables,
-        relationships,
-        transform,
-      });
-      const ddl = renderCanonicalSnowflakeDDL(project);
-      setDdlText(ddl);
-      setDdlVisible(true);
-    } catch (error) {
-      Toast.error(error?.message || "Failed to render Snowflake DDL");
-    }
+    onShowDdl?.();
   };
 
   return (
@@ -647,23 +633,6 @@ export default function ErdToolActions({
             placeholder="Paste an ERD Tool project here"
           />
         </div>
-      </Modal>
-      <Modal
-        title="Snowflake DDL (PK/FK informational)"
-        visible={ddlVisible}
-        onCancel={() => setDdlVisible(false)}
-        onOk={() => setDdlVisible(false)}
-        okText="Close"
-        cancelButtonProps={{ style: { display: "none" } }}
-        width={720}
-        centered
-      >
-        <pre
-          data-testid="erd-ddl-output"
-          className="max-h-[60vh] overflow-auto whitespace-pre-wrap break-words text-sm"
-        >
-          {ddlText}
-        </pre>
       </Modal>
     </>
   );
