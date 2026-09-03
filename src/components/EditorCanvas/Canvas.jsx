@@ -2,7 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { Slot } from "../../context/ExtensionsContext";
 import {
   Action,
-  Cardinality,
   Constraint,
   darkBgTheme,
   ObjectType,
@@ -10,6 +9,7 @@ import {
   gridCircleRadius,
   minAreaSize,
 } from "../../data/constants";
+import { normalizeRelationshipEndpoints } from "../../erdTool/relationshipDirection";
 import { Toast } from "@douyinfe/semi-ui";
 import Table from "./Table";
 import Area from "./Area";
@@ -606,25 +606,6 @@ export default function Canvas() {
     setLinking(true);
   };
 
-  const getCardinality = (startField, endField) => {
-    const startIsUnique = startField.unique || startField.primary;
-    const endIsUnique = endField.unique || endField.primary;
-
-    if (startIsUnique && endIsUnique) {
-      return Cardinality.ONE_TO_ONE;
-    }
-
-    if (startIsUnique && !endIsUnique) {
-      return Cardinality.ONE_TO_MANY;
-    }
-
-    if (!startIsUnique && endIsUnique) {
-      return Cardinality.MANY_TO_ONE;
-    }
-
-    return Cardinality.ONE_TO_ONE;
-  };
-
   const handleLinking = () => {
     if (hoveredTable.tableId === null) return;
     if (hoveredTable.fieldId === null) return;
@@ -650,22 +631,33 @@ export default function Canvas() {
     )
       return;
 
-    const cardinality = getCardinality(startField, endField);
+    const normalized = normalizeRelationshipEndpoints({
+      startTableId: linkingLine.startTableId,
+      startFieldId: linkingLine.startFieldId,
+      startField,
+      startTableName,
+      endTableId: hoveredTable.tableId,
+      endFieldId: hoveredTable.fieldId,
+      endField,
+      endTableName,
+    });
 
     const newRelationship = {
       ...linkingLine,
-      cardinality,
-      endTableId: hoveredTable.tableId,
-      endFieldId: hoveredTable.fieldId,
+      startTableId: normalized.startTableId,
+      startFieldId: normalized.startFieldId,
+      endTableId: normalized.endTableId,
+      endFieldId: normalized.endFieldId,
+      cardinality: normalized.cardinality,
+      name: normalized.name,
       fields: [
         {
-          startFieldId: linkingLine.startFieldId,
-          endFieldId: hoveredTable.fieldId,
+          startFieldId: normalized.startFieldId,
+          endFieldId: normalized.endFieldId,
         },
       ],
       updateConstraint: Constraint.NONE,
       deleteConstraint: Constraint.NONE,
-      name: `fk_${startTableName}_${startField.name}_${endTableName}`,
       id: nanoid(),
     };
     delete newRelationship.startX;

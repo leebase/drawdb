@@ -23,7 +23,7 @@
     "dist:desktop:win": "npm run build:desktop && electron-builder --win --publish never",
     "lint": "eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0",
     "preview": "vite preview",
-    "test": "node --test src/erdTool/projectAdapter.test.js src/erdTool/elkLayout.test.js tests/*.test.mjs",
+    "test": "node --test src/erdTool/projectAdapter.test.js src/erdTool/relationshipDirection.test.js src/erdTool/elkLayout.test.js tests/*.test.mjs",
     "test:browser": "node --test src/erdTool/browserFlow.test.js",
     "test:electron": "node --test tests/electron-runtime.test.mjs",
     "verify:ss002": "npm run test && npm run lint && npm run build && npm run build:desktop",

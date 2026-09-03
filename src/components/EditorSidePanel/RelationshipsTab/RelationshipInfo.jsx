@@ -120,6 +120,12 @@ export default function RelationshipInfo({ data }) {
       startFieldId: p.endFieldId,
       endFieldId: p.startFieldId,
     }));
+    let newCardinality = data.cardinality;
+    if (data.cardinality === Cardinality.ONE_TO_MANY) {
+      newCardinality = Cardinality.MANY_TO_ONE;
+    } else if (data.cardinality === Cardinality.MANY_TO_ONE) {
+      newCardinality = Cardinality.ONE_TO_MANY;
+    }
     const redo = {
       name: `fk_${endTableName}_${
         endTable?.fields?.find((f) => f.id === data.endFieldId)?.name ?? ""
@@ -129,6 +135,7 @@ export default function RelationshipInfo({ data }) {
       fields: swappedPairs,
       startFieldId: swappedPairs[0].startFieldId,
       endFieldId: swappedPairs[0].endFieldId,
+      cardinality: newCardinality,
     };
     setUndoStack((prev) => [
       ...prev,
@@ -143,6 +150,7 @@ export default function RelationshipInfo({ data }) {
           fields: pairs.map((p) => ({ ...p })),
           startFieldId: data.startFieldId,
           endFieldId: data.endFieldId,
+          cardinality: data.cardinality,
         },
         redo,
         message: t("edit_relationship", {

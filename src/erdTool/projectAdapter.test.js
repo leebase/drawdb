@@ -641,6 +641,133 @@ describe("diagramToCanonicalProject", () => {
     );
   });
 
+  it("emits the FK constraint on the start table and references the end table when start field is non-key", () => {
+    const diagram = {
+      title: "fk-direction-test",
+      tables: [
+        {
+          id: "tbl-customer",
+          name: "CUSTOMER",
+          x: 0,
+          y: 0,
+          fields: [
+            {
+              id: "fld-cust-id",
+              name: "CUSTOMER_ID",
+              type: "NUMBER",
+              size: "38,0",
+              primary: true,
+              unique: false,
+              notNull: true,
+            },
+          ],
+        },
+        {
+          id: "tbl-orders",
+          name: "ORDERS",
+          x: 200,
+          y: 0,
+          fields: [
+            {
+              id: "fld-order-id",
+              name: "ORDER_ID",
+              type: "NUMBER",
+              size: "38,0",
+              primary: true,
+              unique: false,
+              notNull: true,
+            },
+            {
+              id: "fld-order-cust-id",
+              name: "CUSTOMER_ID",
+              type: "NUMBER",
+              size: "38,0",
+              primary: false,
+              unique: false,
+              notNull: false,
+            },
+          ],
+        },
+      ],
+      relationships: [
+        {
+          id: "rel-orders-customer",
+          name: "fk_ORDERS_CUSTOMER_ID_CUSTOMER",
+          startTableId: "tbl-orders",
+          startFieldId: "fld-order-cust-id",
+          endTableId: "tbl-customer",
+          endFieldId: "fld-cust-id",
+          fields: [
+            {
+              startFieldId: "fld-order-cust-id",
+              endFieldId: "fld-cust-id",
+            },
+          ],
+          cardinality: "many_to_one",
+          updateConstraint: "No action",
+          deleteConstraint: "No action",
+        },
+      ],
+      transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+    };
+
+    const exported = diagramToCanonicalProject(diagram);
+    const model = exported.physical_model;
+
+    const ordersTable = model.tables.find((t) => t.name === "ORDERS");
+    const customerTable = model.tables.find((t) => t.name === "CUSTOMER");
+
+    assert.ok(ordersTable, "ORDERS table should be present");
+    assert.ok(customerTable, "CUSTOMER table should be present");
+
+    const fkConstraint = ordersTable.constraints.find(
+      (c) => c.kind === "foreign_key",
+    );
+    assert.ok(
+      fkConstraint,
+      "start table (ORDERS) must hold the foreign key constraint",
+    );
+    assert.equal(
+      fkConstraint.referenced_table_id,
+      customerTable.id,
+      "foreign key must reference the end table (CUSTOMER)",
+    );
+
+    const orderCustCol = ordersTable.columns.find(
+      (c) => c.name === "CUSTOMER_ID",
+    );
+    const custIdCol = customerTable.columns.find(
+      (c) => c.name === "CUSTOMER_ID",
+    );
+    assert.deepEqual(fkConstraint.columns, [orderCustCol.id]);
+    assert.deepEqual(fkConstraint.referenced_columns, [custIdCol.id]);
+
+    const customerFkConstraint = customerTable.constraints.find(
+      (c) => c.kind === "foreign_key",
+    );
+    assert.equal(
+      customerFkConstraint,
+      undefined,
+      "end table (CUSTOMER) must not have an outbound foreign key constraint",
+    );
+
+    const modelRel = model.relationships.find(
+      (r) => r.source_table_id === ordersTable.id,
+    );
+    assert.ok(modelRel, "relationship source should be start table");
+    assert.equal(
+      modelRel.target_table_id,
+      customerTable.id,
+      "relationship target should be end table",
+    );
+
+    const ddl = renderCanonicalSnowflakeDDL(exported);
+    assert.match(
+      ddl,
+      /ALTER TABLE MODEL\.PUBLIC\.ORDERS ADD CONSTRAINT [^\s]+ FOREIGN KEY \(CUSTOMER_ID\) REFERENCES MODEL\.PUBLIC\.CUSTOMER \(CUSTOMER_ID\)/,
+    );
+  });
+
   it("rejects mixed namespace presence clearly", () => {
     const diagram = legacyTwoTableDiagramWithoutNamespace();
     diagram.tables[0].namespace = {
