@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, it } from "node:test";
 
+import { SnowflakeCheckError } from "../src/erdTool/projectAdapter.js";
 import { createSnowflakeService } from "../src/electron/snowflakeService.js";
 import { snowflakeMetadataToDiagram } from "../src/erdTool/snowflakeMetadata.js";
 
@@ -40,7 +41,13 @@ function temporaryConfig() {
   return { directory, configPath, keyPath };
 }
 
-function fakeDriver({ connectionError, vectorMetadata = false } = {}) {
+function fakeDriver({
+  connectionError,
+  vectorMetadata = false,
+  checkMetadata = [],
+  checkTableConstraints = [],
+  checkFetchError = null,
+} = {}) {
   const observed = { connectionOptions: null, queries: [], destroyed: 0 };
   const rowsFor = (sqlText) => {
     if (sqlText.startsWith("SELECT CURRENT_ACCOUNT")) {
@@ -85,6 +92,10 @@ function fakeDriver({ connectionError, vectorMetadata = false } = {}) {
           COMMENT: "Compact title embedding",
         },
       ];
+    }
+    if (sqlText.includes(".CHECK_CONSTRAINTS")) {
+      if (checkFetchError) throw checkFetchError;
+      return checkMetadata;
     }
     if (sqlText.startsWith("SHOW PRIMARY KEYS")) {
       return [
@@ -155,6 +166,7 @@ function fakeDriver({ connectionError, vectorMetadata = false } = {}) {
         constraint("ALBUM", "PK_ALBUM", "PRIMARY KEY"),
         constraint("ALBUM", "FK_ALBUM_ARTIST", "FOREIGN KEY"),
         constraint("ARTIST", "PK_ARTIST", "PRIMARY KEY"),
+        ...checkTableConstraints,
       ];
     }
     if (sqlText.includes(".KEY_COLUMN_USAGE")) {
@@ -246,6 +258,20 @@ function constraint(tableName, name, type) {
     TABLE_SCHEMA: "PUBLIC",
     TABLE_NAME: tableName,
     CONSTRAINT_TYPE: type,
+  };
+}
+
+function checkConstraint(tableName, name) {
+  return constraint(tableName, name, "CHECK");
+}
+
+function checkConstraintsRow(tableName, name, clause) {
+  return {
+    CONSTRAINT_CATALOG: "CHINOOK",
+    CONSTRAINT_SCHEMA: "PUBLIC",
+    CONSTRAINT_TABLE: tableName,
+    CONSTRAINT_NAME: name,
+    CHECK_CLAUSE: clause,
   };
 }
 
@@ -444,6 +470,147 @@ describe("live Snowflake Electron-main service", () => {
         { name: "EMBEDDING", type: "VECTOR", size: "FLOAT,1536" },
         { name: "TITLE_VECTOR", type: "VECTOR", size: "INT,3" },
       ],
+    );
+  });
+
+  it("fetches bounded CHECK metadata for every selected base table and preserves clauses", async () => {
+    const { directory, configPath } = temporaryConfig();
+    const driver = fakeDriver({
+      checkTableConstraints: [
+        checkConstraint("ALBUM", "CK_ALBUM"),
+        checkConstraint("ARTIST", "CK_ARTIST"),
+      ],
+      checkMetadata: [
+        checkConstraintsRow(
+          "ALBUM",
+          "CK_ALBUM",
+          "  ALBUM_ID > 0 AND (TITLE <> 'draft')  ",
+        ),
+        checkConstraintsRow("ARTIST", "CK_ARTIST", "LENGTH(NAME) > 0"),
+      ],
+    });
+    const service = createSnowflakeService({
+      driver,
+      homeDirectory: directory,
+      configPaths: [configPath],
+      createId: () => "session-check",
+    });
+    await service.connect({ mode: "profile", profileName: "erd-tool" });
+
+    const metadata = await service.reverseEngineer({
+      sessionId: "session-check",
+      database: "CHINOOK",
+      schema: "PUBLIC",
+      tables: ["ALBUM", "ARTIST"],
+    });
+    assert.deepEqual(
+      metadata.checkConstraints.map(({ constraint_catalog, constraint_schema, constraint_table, constraint_name, check_clause }) =>
+        ({ constraint_catalog, constraint_schema, constraint_table, constraint_name, check_clause })),
+      [
+        {
+          constraint_catalog: "CHINOOK",
+          constraint_schema: "PUBLIC",
+          constraint_table: "ALBUM",
+          constraint_name: "CK_ALBUM",
+          check_clause: "  ALBUM_ID > 0 AND (TITLE <> 'draft')  ",
+        },
+        {
+          constraint_catalog: "CHINOOK",
+          constraint_schema: "PUBLIC",
+          constraint_table: "ARTIST",
+          constraint_name: "CK_ARTIST",
+          check_clause: "LENGTH(NAME) > 0",
+        },
+      ],
+    );
+    const checkQuery = driver.observed.queries.find(({ sqlText }) =>
+      sqlText.includes(".CHECK_CONSTRAINTS"),
+    );
+    assert.ok(checkQuery);
+    assert.match(checkQuery.sqlText, /CONSTRAINT_TABLE IN \(\?, \?\)/);
+    assert.deepEqual(checkQuery.binds, ["PUBLIC", "ALBUM", "ARTIST"]);
+    const tableConstraintQuery = driver.observed.queries.find(({ sqlText }) =>
+      sqlText.includes(".TABLE_CONSTRAINTS"),
+    );
+    assert.match(tableConstraintQuery.sqlText, /'CHECK'/);
+
+    const diagram = snowflakeMetadataToDiagram(metadata, {
+      title: "CHINOOK.PUBLIC",
+    });
+    assert.deepEqual(
+      diagram.tables
+        .filter((table) => table.checkConstraints?.length)
+        .map(({ name, checkConstraints }) => ({ name, checkConstraints })),
+      [
+        {
+          name: "ALBUM",
+          checkConstraints: [
+            {
+              id: "constraint:CHINOOK.PUBLIC.ALBUM.CK_ALBUM",
+              name: "CK_ALBUM",
+              expression: "ALBUM_ID > 0 AND (TITLE <> 'draft')",
+            },
+          ],
+        },
+        {
+          name: "ARTIST",
+          checkConstraints: [
+            {
+              id: "constraint:CHINOOK.PUBLIC.ARTIST.CK_ARTIST",
+              name: "CK_ARTIST",
+              expression: "LENGTH(NAME) > 0",
+            },
+          ],
+        },
+      ],
+    );
+  });
+
+  it("fails the whole reverse-engineering request with typed CHECK errors", async () => {
+    const { directory, configPath } = temporaryConfig();
+    const connectService = (driver, id) => {
+      const service = createSnowflakeService({
+        driver,
+        homeDirectory: directory,
+        configPaths: [configPath],
+        createId: () => id,
+      });
+      return service;
+    };
+    const request = (sessionId) => ({
+      sessionId,
+      database: "CHINOOK",
+      schema: "PUBLIC",
+      tables: ["ALBUM", "ARTIST"],
+    });
+
+    const failedFetch = connectService(
+      fakeDriver({ checkFetchError: new Error("permission denied") }),
+      "session-check-failed",
+    );
+    await failedFetch.connect({ mode: "profile", profileName: "erd-tool" });
+    await assert.rejects(
+      failedFetch.reverseEngineer(request("session-check-failed")),
+      (error) =>
+        error instanceof SnowflakeCheckError &&
+        error.code === "SNOWFLAKE_CHECK_LOSS" &&
+        error.message.includes("SNOWFLAKE_CHECK_LOSS"),
+    );
+
+    const malformed = connectService(
+      fakeDriver({
+        checkTableConstraints: [checkConstraint("ALBUM", "CK_ALBUM")],
+        checkMetadata: [checkConstraintsRow("ALBUM", "CK_ALBUM", "(")],
+      }),
+      "session-check-malformed",
+    );
+    await malformed.connect({ mode: "profile", profileName: "erd-tool" });
+    await assert.rejects(
+      malformed.reverseEngineer(request("session-check-malformed")),
+      (error) =>
+        error instanceof SnowflakeCheckError &&
+        error.code === "SNOWFLAKE_CHECK_INVALID" &&
+        error.message.includes("SNOWFLAKE_CHECK_INVALID"),
     );
   });
 

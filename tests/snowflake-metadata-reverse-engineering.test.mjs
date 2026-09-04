@@ -4,6 +4,7 @@ import { describe, it } from "node:test";
 import {
   canonicalProjectToDiagram,
   diagramToCanonicalProject,
+  SnowflakeCheckError,
 } from "../src/erdTool/projectAdapter.js";
 
 async function loadSnowflakeMetadataMapper() {
@@ -401,6 +402,60 @@ function constraint(catalog, schema, table, name, type) {
   };
 }
 
+function checkConstraint(catalog, schema, table, name, expression) {
+  return {
+    ...constraint(catalog, schema, table, name, "CHECK"),
+    check_clause: expression,
+  };
+}
+
+function checkConstraintsRow(catalog, schema, table, name, expression) {
+  return {
+    constraint_catalog: catalog,
+    constraint_schema: schema,
+    constraint_table: table,
+    constraint_name: name,
+    check_clause: expression,
+  };
+}
+
+function mockedCheckMetadata() {
+  const metadata = structuredClone(mockedSnowflakeMetadata());
+  metadata.tableConstraints.push(
+    checkConstraint(
+      "ANALYTICS",
+      "CORE",
+      "CUSTOMER",
+      "CK_CUSTOMER_EMAIL",
+      "EMAIL IS NOT NULL AND POSITION('@' IN EMAIL) > 1",
+    ),
+    checkConstraint(
+      "ANALYTICS",
+      "MART",
+      "ORDER_FACT",
+      "CK_ORDER_AMOUNT",
+      "  ((ORDER_AMOUNT >= 0) AND (TAX_RATE >= 0 OR TAX_RATE IS NULL))  ",
+    ),
+  );
+  metadata.checkConstraints = [
+    checkConstraintsRow(
+      "ANALYTICS",
+      "CORE",
+      "CUSTOMER",
+      "CK_CUSTOMER_EMAIL",
+      "EMAIL IS NOT NULL AND POSITION('@' IN EMAIL) > 1",
+    ),
+    checkConstraintsRow(
+      "ANALYTICS",
+      "MART",
+      "ORDER_FACT",
+      "CK_ORDER_AMOUNT",
+      "  ((ORDER_AMOUNT >= 0) AND (TAX_RATE >= 0 OR TAX_RATE IS NULL))  ",
+    ),
+  ];
+  return metadata;
+}
+
 function keyUsage(catalog, schema, table, constraintName, columnName, ordinal) {
   return {
     table_catalog: catalog,
@@ -539,6 +594,7 @@ function modelConstraint(catalog, schema, table, name, kind, columnNames) {
     columns: columnNames.map((columnName) => `column:${catalog}.${schema}.${table}.${columnName}`),
     referenced_table_id: null,
     referenced_columns: [],
+    expression: null,
   };
 }
 
@@ -895,6 +951,178 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
         [{ name: "QUERY_VECTOR", type: "VECTOR", size: "FLOAT,4096" }],
       ],
     );
+  });
+
+  it("preserves named CHECK predicates across multiple selected tables", async () => {
+    const { snowflakeMetadataToCanonicalProject, snowflakeMetadataToDiagram } =
+      await loadSnowflakeMetadataMapper();
+    const project = snowflakeMetadataToCanonicalProject(mockedCheckMetadata(), {
+      name: "check-metadata",
+    });
+
+    assert.deepEqual(
+      project.physical_model.tables.flatMap((table) =>
+        table.constraints
+          .filter((constraint) => constraint.kind === "check")
+          .map(({ id, name, kind, columns, referenced_table_id, referenced_columns, expression }) => ({
+            id,
+            name,
+            kind,
+            columns,
+            referenced_table_id,
+            referenced_columns,
+            expression,
+          })),
+      ),
+      [
+        {
+          id: "constraint:ANALYTICS.CORE.CUSTOMER.CK_CUSTOMER_EMAIL",
+          name: "CK_CUSTOMER_EMAIL",
+          kind: "check",
+          columns: [],
+          referenced_table_id: null,
+          referenced_columns: [],
+          expression: "EMAIL IS NOT NULL AND POSITION('@' IN EMAIL) > 1",
+        },
+        {
+          id: "constraint:ANALYTICS.MART.ORDER_FACT.CK_ORDER_AMOUNT",
+          name: "CK_ORDER_AMOUNT",
+          kind: "check",
+          columns: [],
+          referenced_table_id: null,
+          referenced_columns: [],
+          expression: "((ORDER_AMOUNT >= 0) AND (TAX_RATE >= 0 OR TAX_RATE IS NULL))",
+        },
+      ],
+    );
+    assert.ok(
+      project.physical_model.tables
+        .flatMap((table) => table.constraints)
+        .filter((constraint) => constraint.kind !== "check")
+        .every((constraint) => constraint.expression === null),
+    );
+
+    const diagram = snowflakeMetadataToDiagram(mockedCheckMetadata(), {
+      title: "check-metadata",
+    });
+    assert.deepEqual(
+      diagram.tables
+        .filter((table) => table.checkConstraints?.length)
+        .map(({ name, checkConstraints }) => ({ name, checkConstraints })),
+      [
+        {
+          name: "CUSTOMER",
+          checkConstraints: [
+            {
+              id: "constraint:ANALYTICS.CORE.CUSTOMER.CK_CUSTOMER_EMAIL",
+              name: "CK_CUSTOMER_EMAIL",
+              expression: "EMAIL IS NOT NULL AND POSITION('@' IN EMAIL) > 1",
+            },
+          ],
+        },
+        {
+          name: "ORDER_FACT",
+          checkConstraints: [
+            {
+              id: "constraint:ANALYTICS.MART.ORDER_FACT.CK_ORDER_AMOUNT",
+              name: "CK_ORDER_AMOUNT",
+              expression: "((ORDER_AMOUNT >= 0) AND (TAX_RATE >= 0 OR TAX_RATE IS NULL))",
+            },
+          ],
+        },
+      ],
+    );
+  });
+
+  it("fails closed with typed errors for missing, duplicate, orphan, malformed, conflicting, and unsupported CHECK metadata", async () => {
+    const { snowflakeMetadataToCanonicalProject } =
+      await loadSnowflakeMetadataMapper();
+    const assertTyped = (metadata, code, label) => {
+      assert.throws(
+        () => snowflakeMetadataToCanonicalProject(metadata, { name: label }),
+        (error) =>
+          error instanceof SnowflakeCheckError &&
+          error.code === code &&
+          error.message.includes(code),
+        label,
+      );
+    };
+
+    const cases = [
+      [
+        "missing",
+        (metadata) => metadata.checkConstraints.shift(),
+        "SNOWFLAKE_CHECK_LOSS",
+      ],
+      [
+        "duplicate",
+        (metadata) => metadata.checkConstraints.push({ ...metadata.checkConstraints[0] }),
+        "SNOWFLAKE_CHECK_INVALID",
+      ],
+      [
+        "orphan",
+        (metadata) =>
+          metadata.checkConstraints.push(
+            checkConstraintsRow(
+              "ANALYTICS",
+              "CORE",
+              "UNKNOWN_TABLE",
+              "CK_UNKNOWN",
+              "1 = 1",
+            ),
+          ),
+        "SNOWFLAKE_CHECK_LOSS",
+      ],
+      [
+        "malformed",
+        (metadata) => { metadata.checkConstraints[0].check_clause = "(EMAIL IS NOT NULL"; },
+        "SNOWFLAKE_CHECK_INVALID",
+      ],
+      [
+        "conflicting",
+        (metadata) =>
+          metadata.checkConstraints.push({
+            ...metadata.checkConstraints[0],
+            check_clause: "EMAIL <> ''",
+          }),
+        "SNOWFLAKE_CHECK_INVALID",
+      ],
+      [
+        "unsupported",
+        (metadata) => {
+          metadata.tables.push({
+            table_catalog: "ANALYTICS",
+            table_schema: "CORE",
+            table_name: "VIEW_WITH_CHECK",
+            table_type: "VIEW",
+          });
+          metadata.tableConstraints.push(
+            checkConstraint(
+              "ANALYTICS",
+              "CORE",
+              "VIEW_WITH_CHECK",
+              "CK_VIEW",
+              "1 = 1",
+            ),
+          );
+          metadata.checkConstraints.push(
+            checkConstraintsRow(
+              "ANALYTICS",
+              "CORE",
+              "VIEW_WITH_CHECK",
+              "CK_VIEW",
+              "1 = 1",
+            ),
+          );
+        },
+        "SNOWFLAKE_CHECK_UNSUPPORTED",
+      ],
+    ];
+    for (const [label, mutate, code] of cases) {
+      const metadata = mockedCheckMetadata();
+      mutate(metadata);
+      assertTyped(metadata, code, label);
+    }
   });
 
   it("fails closed for missing, duplicate, malformed, and contradictory VECTOR DESCRIBE rows", async () => {

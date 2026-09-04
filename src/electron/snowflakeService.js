@@ -5,7 +5,9 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 
+import { SnowflakeCheckError } from "../erdTool/projectAdapter.js";
 import { canonicalizeSnowflakeType } from "../erdTool/snowflakeTypeContract.js";
+import { indexSnowflakeCheckMetadata } from "../erdTool/snowflakeMetadata.js";
 
 const require = createRequire(
   typeof __filename === "string" ? __filename : import.meta.url,
@@ -72,6 +74,13 @@ const PROFILE_KEYS = new Set([
 
 function fail(code, message) {
   throw new Error(`[${code}] ${message}`);
+}
+
+function checkFailure(code, message) {
+  throw new SnowflakeCheckError(
+    code,
+    String(message || "Snowflake CHECK metadata is invalid"),
+  );
 }
 
 function record(value, label) {
@@ -678,9 +687,26 @@ export function createSnowflakeService({
       }
       const tableConstraints = await executeRows(
         connection,
-        `SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_TYPE FROM ${informationSchema}.TABLE_CONSTRAINTS WHERE ${tableFilter} AND CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY') ORDER BY TABLE_NAME, CONSTRAINT_NAME`,
+        `SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_TYPE FROM ${informationSchema}.TABLE_CONSTRAINTS WHERE ${tableFilter} AND CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY', 'CHECK') ORDER BY TABLE_NAME, CONSTRAINT_NAME`,
         tableBinds,
       );
+      let checkConstraints;
+      try {
+        // CHECK_CONSTRAINTS has CONSTRAINT_TABLE (not TABLE_NAME).  Keep this
+        // query fixed and bounded by the validated selected base-table names;
+        // no renderer-provided SQL or identifiers enter the statement.
+        checkConstraints = await executeRows(
+          connection,
+          `SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_TABLE, CONSTRAINT_NAME, CHECK_CLAUSE FROM ${informationSchema}.CHECK_CONSTRAINTS WHERE CONSTRAINT_SCHEMA = ? AND CONSTRAINT_TABLE IN (${placeholders}) ORDER BY CONSTRAINT_TABLE, CONSTRAINT_NAME`,
+          tableBinds,
+        );
+      } catch (error) {
+        if (error instanceof SnowflakeCheckError) throw error;
+        checkFailure(
+          "SNOWFLAKE_CHECK_LOSS",
+          `Could not retrieve Snowflake CHECK metadata: ${safeErrorMessage(error, "CHECK_CONSTRAINTS query failed.", homeDirectory)}`,
+        );
+      }
       const keyScope = `${quoteIdentifier(database, "database")}.${quoteIdentifier(schema, "schema")}`;
       const primaryKeyRows = await executeRows(
         connection,
@@ -720,6 +746,21 @@ export function createSnowflakeService({
         (constraint) =>
           constraint.constraint_type !== "FOREIGN KEY" ||
           selectedForeignKeyNames.has(constraint.constraint_name),
+      );
+      indexSnowflakeCheckMetadata(
+        {
+          tables: tableRows,
+          tableConstraints: selectedTableConstraints,
+          checkConstraints,
+        },
+        {
+          selectedTableKeys: new Set(
+            tableRows.map(
+              (row) =>
+                `${row.table_catalog}\0${row.table_schema}\0${row.table_name}`,
+            ),
+          ),
+        },
       );
       const keyColumnUsage = [
         ...selectedPrimaryAndUniqueRows.map((row) => ({
@@ -775,10 +816,12 @@ export function createSnowflakeService({
         columns,
         describeRows,
         tableConstraints: selectedTableConstraints,
+        checkConstraints,
         keyColumnUsage,
         referentialConstraints,
       };
     } catch (error) {
+      if (error instanceof SnowflakeCheckError) throw error;
       if (String(error?.message).startsWith("[SNOWFLAKE_")) throw error;
       fail(
         "SNOWFLAKE_REVERSE_ENGINEERING_FAILED",

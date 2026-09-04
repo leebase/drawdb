@@ -1,4 +1,8 @@
-import { canonicalProjectToDiagram } from "./projectAdapter.js";
+import {
+  canonicalProjectToDiagram,
+  SnowflakeCheckError,
+  validateSnowflakeCheckExpression,
+} from "./projectAdapter.js";
 import { canonicalizeSnowflakeType } from "./snowflakeTypeContract.js";
 
 const PROJECT_VERSION = "2";
@@ -14,6 +18,40 @@ const CONSTRAINT_KIND = new Map([
 
 function fail(message) {
   throw new Error(message);
+}
+
+function checkFailure(code, message) {
+  throw new SnowflakeCheckError(
+    code,
+    String(message || "Snowflake CHECK metadata is invalid"),
+  );
+}
+
+function checkErrorOrInvalid(error) {
+  if (error instanceof SnowflakeCheckError) throw error;
+  checkFailure("SNOWFLAKE_CHECK_INVALID", error?.message);
+}
+
+function checkIdentifier(value, label) {
+  try {
+    return identifier(value, label);
+  } catch (error) {
+    checkErrorOrInvalid(error);
+  }
+}
+
+function validatedCheckExpression(value, label) {
+  if (typeof value !== "string") {
+    checkFailure("SNOWFLAKE_CHECK_INVALID", `${label} must be a string`);
+  }
+  if (!value.trim()) {
+    checkFailure("SNOWFLAKE_CHECK_INVALID", `${label} must be nonblank`);
+  }
+  try {
+    return validateSnowflakeCheckExpression(value);
+  } catch (error) {
+    checkErrorOrInvalid(error);
+  }
 }
 
 function rows(value, label) {
@@ -507,9 +545,315 @@ function buildNamespaces(metadata, tableRows) {
   return sortById([...namespaces.values()]);
 }
 
+function checkConstraintKey(catalog, schema, tableName, constraintName) {
+  return `${catalog}\0${schema}\0${tableName}\0${constraintName}`;
+}
+
+function buildMetadataTableKinds(metadata) {
+  const tableKinds = new Map();
+  for (const [rowIndex, row] of rows(metadata.tables, "tables").entries()) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      checkFailure("SNOWFLAKE_CHECK_INVALID", `tables[${rowIndex}] must be an object`);
+    }
+    const catalog = checkIdentifier(
+      metadataValue(row, "table_catalog"),
+      `tables[${rowIndex}].table_catalog`,
+    );
+    const schema = checkIdentifier(
+      metadataValue(row, "table_schema"),
+      `tables[${rowIndex}].table_schema`,
+    );
+    const tableName = checkIdentifier(
+      metadataValue(row, "table_name"),
+      `tables[${rowIndex}].table_name`,
+    );
+    const key = objectKey(catalog, schema, tableName);
+    const kind = String(metadataValue(row, "table_type") ?? "")
+      .trim()
+      .toUpperCase();
+    if (!kind) {
+      checkFailure(
+        "SNOWFLAKE_CHECK_INVALID",
+        `tables[${rowIndex}].table_type must be nonblank`,
+      );
+    }
+    const previous = tableKinds.get(key);
+    if (previous !== undefined && previous !== kind) {
+      checkFailure(
+        "SNOWFLAKE_CHECK_INVALID",
+        `conflicting table types for ${catalog}.${schema}.${tableName}`,
+      );
+    }
+    tableKinds.set(key, kind);
+  }
+  return tableKinds;
+}
+
+function requireSelectedCheckTable(
+  tableKey,
+  tableKinds,
+  selectedTables,
+  catalog,
+  schema,
+  tableName,
+) {
+  if (selectedTables.has(tableKey)) return;
+  const kind = tableKinds.get(tableKey);
+  if (kind !== undefined && kind !== "BASE TABLE") {
+    checkFailure(
+      "SNOWFLAKE_CHECK_UNSUPPORTED",
+      `CHECK constraint on unsupported Snowflake table type ${kind}: ${catalog}.${schema}.${tableName}`,
+    );
+  }
+  checkFailure(
+    "SNOWFLAKE_CHECK_LOSS",
+    `CHECK constraint ${catalog}.${schema}.${tableName} is not attached to a selected base table`,
+  );
+}
+
+function tableConstraintCheckIdentity(row, label) {
+  const tableCatalog = checkIdentifier(
+    metadataValue(row, "table_catalog"),
+    `${label}.table_catalog`,
+  );
+  const tableSchema = checkIdentifier(
+    metadataValue(row, "table_schema"),
+    `${label}.table_schema`,
+  );
+  const tableName = checkIdentifier(
+    metadataValue(row, "table_name"),
+    `${label}.table_name`,
+  );
+  const constraintCatalog = checkIdentifier(
+    metadataValue(row, "constraint_catalog"),
+    `${label}.constraint_catalog`,
+  );
+  const constraintSchema = checkIdentifier(
+    metadataValue(row, "constraint_schema"),
+    `${label}.constraint_schema`,
+  );
+  const constraintName = checkIdentifier(
+    metadataValue(row, "constraint_name"),
+    `${label}.constraint_name`,
+  );
+  if (
+    tableCatalog !== constraintCatalog ||
+    tableSchema !== constraintSchema
+  ) {
+    checkFailure(
+      "SNOWFLAKE_CHECK_INVALID",
+      `${label} has conflicting table and constraint namespace identity`,
+    );
+  }
+  return {
+    catalog: constraintCatalog,
+    schema: constraintSchema,
+    tableName,
+    name: constraintName,
+    tableKey: objectKey(tableCatalog, tableSchema, tableName),
+    key: checkConstraintKey(
+      constraintCatalog,
+      constraintSchema,
+      tableName,
+      constraintName,
+    ),
+  };
+}
+
+function checkConstraintRowIdentity(row, label) {
+  const catalog = checkIdentifier(
+    metadataValue(row, "constraint_catalog"),
+    `${label}.constraint_catalog`,
+  );
+  const schema = checkIdentifier(
+    metadataValue(row, "constraint_schema"),
+    `${label}.constraint_schema`,
+  );
+  // CHECK_CONSTRAINTS calls this column CONSTRAINT_TABLE.  Do not fall back to
+  // TABLE_NAME: accepting the wrong transport shape can silently join a check
+  // from another table.
+  const tableName = checkIdentifier(
+    metadataValue(row, "constraint_table"),
+    `${label}.constraint_table`,
+  );
+  const name = checkIdentifier(
+    metadataValue(row, "constraint_name"),
+    `${label}.constraint_name`,
+  );
+  return {
+    catalog,
+    schema,
+    tableName,
+    name,
+    tableKey: objectKey(catalog, schema, tableName),
+    key: checkConstraintKey(catalog, schema, tableName, name),
+  };
+}
+
+export function indexSnowflakeCheckMetadata(
+  metadata,
+  { selectedTableKeys = null } = {},
+) {
+  let tableConstraintRows;
+  let checkRows;
+  try {
+    tableConstraintRows = rows(metadata.tableConstraints, "tableConstraints");
+    checkRows = rows(metadata.checkConstraints, "checkConstraints");
+  } catch (error) {
+    checkErrorOrInvalid(error);
+  }
+
+  const hasCheckRows =
+    checkRows.length > 0 ||
+    tableConstraintRows.some(
+      (row) =>
+        row &&
+        typeof row === "object" &&
+        String(metadataValue(row, "constraint_type") ?? "")
+          .trim()
+          .toUpperCase() === "CHECK",
+    );
+  if (!hasCheckRows) return new Map();
+
+  const tableKinds = buildMetadataTableKinds(metadata);
+  const selectedTables =
+    selectedTableKeys ??
+    new Set(
+      rows(metadata.tables, "tables")
+        .filter(
+          (row) =>
+            String(metadataValue(row, "table_type") ?? "")
+              .trim()
+              .toUpperCase() === "BASE TABLE",
+        )
+        .map((row) =>
+          objectKey(
+            checkIdentifier(metadataValue(row, "table_catalog"), "table.table_catalog"),
+            checkIdentifier(metadataValue(row, "table_schema"), "table.table_schema"),
+            checkIdentifier(metadataValue(row, "table_name"), "table.table_name"),
+          ),
+        ),
+    );
+  const declarations = new Map();
+  for (const [rowIndex, row] of tableConstraintRows.entries()) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      checkFailure(
+        "SNOWFLAKE_CHECK_INVALID",
+        `tableConstraints[${rowIndex}] must be an object`,
+      );
+    }
+    const type = String(metadataValue(row, "constraint_type") ?? "")
+      .trim()
+      .toUpperCase();
+    if (type !== "CHECK") continue;
+    const identity = tableConstraintCheckIdentity(
+      row,
+      `tableConstraints[${rowIndex}]`,
+    );
+    requireSelectedCheckTable(
+      identity.tableKey,
+      tableKinds,
+      selectedTables,
+      identity.catalog,
+      identity.schema,
+      identity.tableName,
+    );
+    if (declarations.has(identity.key)) {
+      checkFailure(
+        "SNOWFLAKE_CHECK_INVALID",
+        `duplicate TABLE_CONSTRAINTS CHECK row for ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name}`,
+      );
+    }
+    declarations.set(identity.key, identity);
+  }
+
+  const checks = new Map();
+  for (const [rowIndex, row] of checkRows.entries()) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      checkFailure(
+        "SNOWFLAKE_CHECK_INVALID",
+        `checkConstraints[${rowIndex}] must be an object`,
+      );
+    }
+    const label = `checkConstraints[${rowIndex}]`;
+    const identity = checkConstraintRowIdentity(row, label);
+    requireSelectedCheckTable(
+      identity.tableKey,
+      tableKinds,
+      selectedTables,
+      identity.catalog,
+      identity.schema,
+      identity.tableName,
+    );
+    const expression = validatedCheckExpression(
+      metadataValue(row, "check_clause"),
+      `${label}.check_clause`,
+    );
+    const existing = checks.get(identity.key);
+    if (existing) {
+      if (existing.expression !== expression) {
+        checkFailure(
+          "SNOWFLAKE_CHECK_INVALID",
+          `conflicting CHECK metadata for ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name}`,
+        );
+      }
+      checkFailure(
+        "SNOWFLAKE_CHECK_INVALID",
+        `duplicate CHECK_CONSTRAINTS row for ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name}`,
+      );
+    }
+    checks.set(identity.key, { ...identity, expression });
+  }
+
+  for (const identity of declarations.values()) {
+    if (!checks.has(identity.key)) {
+      checkFailure(
+        "SNOWFLAKE_CHECK_LOSS",
+        `CHECK constraint ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name} is missing from CHECK_CONSTRAINTS`,
+      );
+    }
+  }
+  for (const identity of checks.values()) {
+    if (!declarations.has(identity.key)) {
+      checkFailure(
+        "SNOWFLAKE_CHECK_LOSS",
+        `orphan CHECK_CONSTRAINTS row for ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name}`,
+      );
+    }
+  }
+
+  const checksByTable = new Map();
+  for (const check of checks.values()) {
+    const constraint = {
+      id: constraintId(
+        check.catalog,
+        check.schema,
+        check.tableName,
+        check.name,
+      ),
+      name: check.name,
+      kind: "check",
+      columns: [],
+      referenced_table_id: null,
+      referenced_columns: [],
+      expression: check.expression,
+      _catalog: check.catalog,
+      _schema: check.schema,
+      _tableName: check.tableName,
+    };
+    if (!checksByTable.has(check.tableKey)) checksByTable.set(check.tableKey, []);
+    checksByTable.get(check.tableKey).push(constraint);
+  }
+  return checksByTable;
+}
+
 function buildConstraintIndexes(metadata, tablesByKey) {
   const constraintsByTable = new Map();
   const constraintsByKey = new Map();
+  const checkConstraintsByTable = indexSnowflakeCheckMetadata(
+    metadata,
+    { selectedTableKeys: tablesByKey },
+  );
 
   for (const row of rows(metadata.tableConstraints, "tableConstraints")) {
     const catalog = identifier(row.table_catalog, "constraint.table_catalog");
@@ -531,6 +875,7 @@ function buildConstraintIndexes(metadata, tablesByKey) {
       _catalog: catalog,
       _schema: schema,
       _tableName: tableName,
+      expression: null,
     };
     if (!constraintsByTable.has(tableKey)) constraintsByTable.set(tableKey, []);
     constraintsByTable.get(tableKey).push(constraint);
@@ -645,6 +990,13 @@ function buildConstraintIndexes(metadata, tablesByKey) {
 
   for (const constraints of constraintsByTable.values()) {
     constraints.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+  for (const [tableKey, checks] of checkConstraintsByTable) {
+    if (!constraintsByTable.has(tableKey)) constraintsByTable.set(tableKey, []);
+    constraintsByTable.get(tableKey).push(...checks);
+    constraintsByTable
+      .get(tableKey)
+      .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
   }
   return constraintsByTable;
 }
