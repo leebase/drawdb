@@ -16,14 +16,30 @@ if (mode === "web") {
   page = await app.firstWindow(); hook(page); await page.waitForLoadState("domcontentloaded");
 }
 await page.waitForTimeout(2000);
-const modalText = await page.locator(".semi-modal-wrap").allInnerTexts().catch(()=>[]);
-if (modalText.length) { console.error("STARTUP MODAL:", JSON.stringify(modalText).slice(0,600)); const cancel = page.locator(".semi-modal-wrap button").filter({ hasText: /cancel|close|skip|later|no thanks/i }).first(); if (await cancel.count()) await cancel.click(); else await page.keyboard.press("Escape"); await page.waitForTimeout(800); }
+const modalWrap = page.locator(".semi-modal-wrap");
+if (await modalWrap.count() && await modalWrap.first().isVisible().catch(() => false)) {
+  const snowflakeCard = page.locator(".semi-modal-wrap div").filter({ hasText: /^Snowflake/ }).first();
+  if (await snowflakeCard.count()) {
+    await snowflakeCard.click();
+    await page.waitForTimeout(300);
+  }
+  const confirmBtn = page.locator(".semi-modal-wrap button").filter({ hasText: /confirm/i }).first();
+  if (await confirmBtn.count()) {
+    await confirmBtn.click();
+    await page.waitForTimeout(800);
+  }
+}
 const before = await page.evaluate(() => document.body.innerText.length);
 const btn = page.locator(ADD_TABLE).first();
 const visible = await btn.isVisible().catch(() => false);
-if (visible) { await btn.click(); await page.waitForTimeout(1500); }
+if (visible) {
+  await btn.click();
+  await page.waitForTimeout(800);
+  await btn.click();
+  await page.waitForTimeout(1000);
+}
 const after = await page.evaluate(() => document.body.innerText.length);
 const tables = await page.locator("foreignObject").count();
 console.log(JSON.stringify({ mode, addTableButtonVisible: visible, bodyTextBefore: before, bodyTextAfter: after, foreignObjects: tables, errors }, null, 1));
 if (browser) await browser.close(); if (app) await app.close(); if (srv) srv.close();
-process.exit(0);
+process.exit(errors.some(e => e.startsWith("PAGEERROR")) ? 1 : 0);

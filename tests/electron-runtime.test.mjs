@@ -719,6 +719,7 @@ describe("SS-004 native project file bridge contract", () => {
       "connections:test",
       "connections:update",
       "ddl:export",
+      "desktop:build-info",
       "dialog:unsaved-changes",
       "llm:clear-api-key",
       "llm:propose-schema",
@@ -729,6 +730,7 @@ describe("SS-004 native project file bridge contract", () => {
       "project:save-as",
       "snowflake:connect",
       "snowflake:disconnect",
+      "snowflake:execute-ddl",
       "snowflake:list-databases",
       "snowflake:list-schemas",
       "snowflake:list-tables",
@@ -776,6 +778,7 @@ describe("SS-004 native project file bridge contract", () => {
     assert.deepEqual(Object.keys(desktopApi.snowflake).sort(), [
       "connect",
       "disconnect",
+      "executeDdl",
       "listDatabases",
       "listProfiles",
       "listSchemas",
@@ -1176,7 +1179,7 @@ describe("SS-004 native project file bridge contract", () => {
       );
       for (const { request } of invocations) {
         assert.deepEqual(JSON.parse(request.contents), openedProject);
-        assert.match(request.suggestedName, /\.erd\.json$/);
+        assert.match(request.suggestedName, /\.(?:erdproj|erd\.json)$/);
         assert.doesNotMatch(request.contents, /credential|password|secret/i);
       }
     } finally {

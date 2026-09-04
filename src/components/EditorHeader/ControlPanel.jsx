@@ -1,4 +1,4 @@
-import { useContext, useEffect, useState } from "react";
+import { useContext, useEffect, useRef, useState } from "react";
 import { v4 as uuidv4 } from "uuid";
 import { Slot, useExtensions } from "../../context/ExtensionsContext";
 import { createPortal } from "react-dom";
@@ -1923,6 +1923,19 @@ export default function ControlPanel({
   useHotkeys("mod+alt+w", fitWindow, { preventDefault: true });
   useHotkeys("alt+e", toggleDBMLEditor, { preventDefault: true });
 
+  const fitWindowRef = useRef(fitWindow);
+  fitWindowRef.current = fitWindow;
+
+  useEffect(() => {
+    const handleFit = () => {
+      setTimeout(() => {
+        fitWindowRef.current?.();
+      }, 50);
+    };
+    window.addEventListener("drawdb:fit-window", handleFit);
+    return () => window.removeEventListener("drawdb:fit-window", handleFit);
+  }, []);
+
   return (
     <>
       <div>
@@ -1943,7 +1956,7 @@ export default function ControlPanel({
                 onNativeChipChange={setNativeChip}
                 onNativeSavingChange={setNativeSaving}
               />
-              {!isTemplate && (
+              {!isTemplate && !hasDesktopProjectFiles() && (
                 <Button
                   type="primary"
                   className="!text-base !pe-6 !ps-5 !py-[18px] !rounded-md"

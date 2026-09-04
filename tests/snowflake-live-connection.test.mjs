@@ -145,6 +145,9 @@ function fakeDriver({ connectionError } = {}) {
         },
       ];
     }
+    if (sqlText.startsWith("CREATE ") || sqlText.startsWith("ALTER ")) {
+      return [{ status: "Statement executed successfully." }];
+    }
     throw new Error(`Unexpected test query: ${sqlText}`);
   };
 
@@ -388,4 +391,51 @@ describe("live Snowflake Electron-main service", () => {
         !error.message.includes("\n"),
     );
   });
+
+  it("executes discrete DDL statements sequentially and sanitizes errors", async () => {
+    const { directory, configPath } = temporaryConfig();
+    const driver = fakeDriver();
+    const service = createSnowflakeService({
+      driver,
+      homeDirectory: directory,
+      configPaths: [configPath],
+      createId: () => "session-ddl",
+    });
+    await service.connect({ mode: "profile", profileName: "erd-tool" });
+
+    const result = await service.executeDdl({
+      sessionId: "session-ddl",
+      statements: [
+        "CREATE DATABASE IF NOT EXISTS TEST_DB;",
+        "CREATE SCHEMA IF NOT EXISTS TEST_DB.PUBLIC;",
+        "CREATE TABLE IF NOT EXISTS TEST_DB.PUBLIC.T1 (ID NUMBER);",
+      ],
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.results.length, 3);
+    assert.deepEqual(result.results.map((r) => r.ok), [true, true, true]);
+
+    const ddlQueries = driver.observed.queries.filter(({ sqlText }) =>
+      sqlText.startsWith("CREATE "),
+    );
+    assert.equal(ddlQueries.length, 3);
+
+    const failedResult = await service.executeDdl({
+      sessionId: "session-ddl",
+      statements: ["DROP DATABASE TEST_DB;"],
+    });
+    assert.equal(failedResult.ok, false);
+    assert.equal(failedResult.results[0].ok, false);
+    assert.match(failedResult.results[0].error, /Unexpected test query/);
+
+    await assert.rejects(
+      service.executeDdl({
+        sessionId: "session-ddl",
+        statements: "not-an-array",
+      }),
+      /SNOWFLAKE_INVALID_REQUEST/,
+    );
+  });
 });
+

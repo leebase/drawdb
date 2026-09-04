@@ -234,6 +234,20 @@ export default function Table({
     return { tableName: refTable.name, fieldName: refField.name };
   };
 
+  const effectiveWidth = useMemo(() => {
+    let maxW = Math.max(280, settings.tableWidth || 280);
+    const tableNameW = (tableData.name || "").length * 9 + 80;
+    if (tableNameW > maxW) maxW = tableNameW;
+    for (const f of visibleFields) {
+      const typeStr =
+        (f.type || "") +
+        (f.size && f.size !== "" ? `(${f.size})` : "");
+      const fieldW = (f.name || "").length * 8.5 + typeStr.length * 7.5 + 65;
+      if (fieldW > maxW) maxW = fieldW;
+    }
+    return Math.min(Math.ceil(maxW), 480);
+  }, [tableData.name, visibleFields, settings.tableWidth]);
+
   if (tableData.hidden) return null;
 
   return (
@@ -242,7 +256,7 @@ export default function Table({
         key={tableData.id}
         x={tableData.x}
         y={tableData.y}
-        width={settings.tableWidth}
+        width={effectiveWidth}
         height={height}
         className="group drop-shadow-lg rounded-md cursor-move"
         onPointerDown={onPointerDown}

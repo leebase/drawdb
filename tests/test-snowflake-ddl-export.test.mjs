@@ -427,10 +427,10 @@ describe("SS-005 Snowflake DDL export", () => {
     );
 
     const unsupportedType = snowflakeDiagramFixture();
-    unsupportedType.tables[0].fields[0].type = "GEOGRAPHY";
+    unsupportedType.tables[0].fields[0].type = "BLOB";
     assert.throws(
       () => exportSQL(unsupportedType),
-      /unsupported.*(?:field )?type.*GEOGRAPHY/i,
+      /unsupported.*(?:field )?type.*BLOB/i,
     );
   });
 
@@ -506,9 +506,9 @@ describe("SS-005 Snowflake DDL export", () => {
     assert.throws(
       () =>
         parseSnowflakeDDLToCanonicalProject(
-          "CREATE TABLE ANALYTICS.CORE.EVENTS (PAYLOAD VARIANT);",
+          "CREATE TABLE ANALYTICS.CORE.EVENTS (PAYLOAD XML);",
         ),
-      /unsupported type family VARIANT/i,
+      /unsupported type family XML/i,
     );
     assert.throws(
       () =>

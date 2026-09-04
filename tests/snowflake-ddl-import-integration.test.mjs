@@ -197,7 +197,7 @@ describe("SS-008 Snowflake DDL import integration", () => {
   it("reports unsupported or malformed Snowflake DDL without crashing", () => {
     for (const ddl of [
       'CREATE TABLE ANALYTICS.CORE."Customer" (ID NUMBER(38, 0));',
-      "CREATE TABLE ANALYTICS.CORE.EVENT_LOG (ID VARIANT);",
+      "CREATE TABLE ANALYTICS.CORE.EVENT_LOG (ID XML);",
       "ALTER TABLE ANALYTICS.CORE.ORDER_HEADER ADD CONSTRAINT FK_BROKEN FOREIGN KEY (CUSTOMER_ID) REFERENCES ANALYTICS.CORE.MISSING (ID) NOT ENFORCED;",
       "CREATE TABLE ANALYTICS.CORE.MALFORMED (ID NUMBER(38, 0)",
     ]) {

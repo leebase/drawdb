@@ -31,10 +31,19 @@ export async function layoutDiagram(tables, relationships) {
     return [];
   }
 
+  const hasEdges = inputRelationships.length > 0;
+  const layoutOptions = hasEdges
+    ? { ...ELK_OPTIONS }
+    : {
+        "elk.algorithm": "box",
+        "elk.spacing.nodeNode": "48",
+        "elk.padding": "[top=24,left=24,bottom=24,right=24]",
+      };
+
   const elk = new ELK();
   const graph = {
     id: "erd-root",
-    layoutOptions: { ...ELK_OPTIONS },
+    layoutOptions,
     children: inputTables.map((table) => ({
       id: String(table.id),
       width: tableWidth,

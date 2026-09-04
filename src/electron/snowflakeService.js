@@ -63,12 +63,20 @@ const SNOWFLAKE_TYPE_ALIASES = new Map([
   ["INTEGER", "NUMBER"],
   ["BIGINT", "NUMBER"],
   ["SMALLINT", "NUMBER"],
+  ["TINYINT", "NUMBER"],
+  ["BYTEINT", "NUMBER"],
   ["FIXED", "NUMBER"],
   ["TEXT", "VARCHAR"],
   ["STRING", "VARCHAR"],
+  ["CHAR", "VARCHAR"],
+  ["CHARACTER", "VARCHAR"],
   ["REAL", "FLOAT"],
+  ["FLOAT4", "FLOAT"],
+  ["FLOAT8", "FLOAT"],
   ["DOUBLE", "FLOAT"],
   ["DOUBLE PRECISION", "FLOAT"],
+  ["DATETIME", "TIMESTAMP_NTZ"],
+  ["TIMESTAMP", "TIMESTAMP_NTZ"],
 ]);
 const PROFILE_KEYS = new Set([
   "account",
@@ -750,6 +758,44 @@ export function createSnowflakeService({
     }
   }
 
+  async function executeDdl(payloadValue) {
+    const payload = record(payloadValue, "execute DDL request");
+    exactKeys(payload, new Set(["sessionId", "statements"]), "execute DDL");
+    const sessionId = requiredText(payload.sessionId, "session id");
+    if (!Array.isArray(payload.statements)) {
+      fail("SNOWFLAKE_INVALID_REQUEST", "statements must be an array.");
+    }
+    const { connection } = requireSession(sessionId);
+    const results = [];
+    let allOk = true;
+
+    for (const stmt of payload.statements) {
+      if (typeof stmt !== "string" || !stmt.trim()) continue;
+      const sqlText = stmt.trim();
+      try {
+        const rows = await executeRows(connection, sqlText);
+        results.push({
+          statement: sqlText,
+          ok: true,
+          rowsAffected: rows.length,
+        });
+      } catch (err) {
+        allOk = false;
+        results.push({
+          statement: sqlText,
+          ok: false,
+          error: safeErrorMessage(err, "Failed to execute statement.", homeDirectory),
+        });
+        break;
+      }
+    }
+
+    return {
+      ok: allOk,
+      results,
+    };
+  }
+
   async function disconnectAll() {
     const activeSessions = [...sessions.keys()];
     await Promise.all(activeSessions.map((sessionId) => disconnect(sessionId)));
@@ -764,5 +810,6 @@ export function createSnowflakeService({
     listSchemas,
     listTables,
     reverseEngineer,
+    executeDdl,
   };
 }

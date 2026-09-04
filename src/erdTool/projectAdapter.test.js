@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import {
   canonicalProjectToDiagram,
   diagramToCanonicalProject,
+  parseSnowflakeDDLToCanonicalProject,
   renderCanonicalSnowflakeDDL,
+  renderCanonicalSnowflakeStatements,
   toSnowflakeIdentifier,
 } from "./projectAdapter.js";
 
@@ -1424,6 +1426,67 @@ describe("diagramToCanonicalProject", () => {
     });
   });
 
+  it("supports all extended Snowflake data types and unconstrained VARCHAR", () => {
+    const testFields = [
+      { name: "COL_VARCHAR_UNCONSTRAINED", type: "VARCHAR", size: "" },
+      { name: "COL_VARCHAR_SIZED", type: "VARCHAR", size: 100 },
+      { name: "COL_TIME", type: "TIME", size: 9 },
+      { name: "COL_TIMESTAMP_LTZ", type: "TIMESTAMP_LTZ", size: 9 },
+      { name: "COL_TIMESTAMP_TZ", type: "TIMESTAMP_TZ", size: 9 },
+      { name: "COL_VARIANT", type: "VARIANT" },
+      { name: "COL_OBJECT", type: "OBJECT" },
+      { name: "COL_ARRAY", type: "ARRAY" },
+      { name: "COL_GEOGRAPHY", type: "GEOGRAPHY" },
+      { name: "COL_GEOMETRY", type: "GEOMETRY" },
+      { name: "COL_VECTOR", type: "VECTOR" },
+    ];
+
+    const diagram = {
+      title: "all-types-model",
+      tables: [
+        {
+          id: "t1",
+          name: "EXTENDED_TYPES",
+          x: 0,
+          y: 0,
+          comment: "",
+          fields: testFields.map((f, i) => ({
+            id: `f_${i}`,
+            name: f.name,
+            type: f.type,
+            size: f.size ?? "",
+            default: "",
+            check: "",
+            primary: i === 0,
+            unique: false,
+            notNull: i === 0,
+            increment: false,
+            comment: "",
+          })),
+        },
+      ],
+      relationships: [],
+      transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+    };
+
+    const exported = diagramToCanonicalProject(diagram);
+    const ddl = renderCanonicalSnowflakeDDL(exported);
+    assert.match(ddl, /COL_VARCHAR_UNCONSTRAINED VARCHAR NOT NULL/);
+    assert.match(ddl, /COL_VARCHAR_SIZED VARCHAR\(100\)/);
+    assert.match(ddl, /COL_TIME TIME\(9\)/);
+    assert.match(ddl, /COL_TIMESTAMP_LTZ TIMESTAMP_LTZ\(9\)/);
+    assert.match(ddl, /COL_TIMESTAMP_TZ TIMESTAMP_TZ\(9\)/);
+    assert.match(ddl, /COL_VARIANT VARIANT/);
+    assert.match(ddl, /COL_OBJECT OBJECT/);
+    assert.match(ddl, /COL_ARRAY ARRAY/);
+    assert.match(ddl, /COL_GEOGRAPHY GEOGRAPHY/);
+    assert.match(ddl, /COL_GEOMETRY GEOMETRY/);
+    assert.match(ddl, /COL_VECTOR VECTOR/);
+
+    const reimported = parseSnowflakeDDLToCanonicalProject(ddl);
+    assert.equal(reimported.physical_model.tables[0].columns.length, 11);
+  });
+
   it("allows the same FK name on different source tables and rejects duplicates on one", () => {
     const sharedFk = "FK_SHARED_PARENT";
     const diagram = {
@@ -2175,6 +2238,39 @@ describe("renderCanonicalSnowflakeDDL", () => {
         },
       }),
     );
+  });
+});
+
+describe("renderCanonicalSnowflakeStatements", () => {
+  it("emits discrete executable statements without empty entries", () => {
+    const stmts = renderCanonicalSnowflakeStatements(twoTableProject());
+    assert.ok(stmts.length >= 3);
+    for (const stmt of stmts) {
+      assert.ok(typeof stmt === "string" && stmt.trim().length > 0);
+      assert.equal(stmt.endsWith(";"), true);
+    }
+    assert.match(stmts[0], /^CREATE DATABASE IF NOT EXISTS ANALYTICS;$/);
+    assert.match(stmts[1], /^CREATE SCHEMA IF NOT EXISTS ANALYTICS\.CORE;$/);
+    assert.match(stmts[2], /^CREATE TABLE IF NOT EXISTS ANALYTICS\.CORE\.CUSTOMER/);
+  });
+
+  it("applies target database and schema overrides across all emitted statements", () => {
+    const stmts = renderCanonicalSnowflakeStatements(twoTableProject(), {
+      databaseOverride: "PROD_DB",
+      schemaOverride: "SALES",
+    });
+    assert.match(stmts[0], /^CREATE DATABASE IF NOT EXISTS PROD_DB;$/);
+    assert.match(stmts[1], /^CREATE SCHEMA IF NOT EXISTS PROD_DB\.SALES;$/);
+    assert.match(stmts[2], /^CREATE TABLE IF NOT EXISTS PROD_DB\.SALES\.CUSTOMER/);
+  });
+
+  it("supports replace: true replacing IF NOT EXISTS semantics", () => {
+    const stmts = renderCanonicalSnowflakeStatements(twoTableProject(), {
+      replace: true,
+    });
+    assert.match(stmts[0], /^CREATE DATABASE IF NOT EXISTS ANALYTICS;$/);
+    assert.match(stmts[1], /^CREATE SCHEMA IF NOT EXISTS ANALYTICS\.CORE;$/);
+    assert.match(stmts[2], /^CREATE OR REPLACE TABLE ANALYTICS\.CORE\.CUSTOMER/);
   });
 });
 

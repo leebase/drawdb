@@ -872,15 +872,15 @@ describe("SS-015 Terraform round-trip engineering", () => {
 
     const invalid = structuredClone(project);
     invalid.physical_model.tables[0].columns[0].data_type = {
-      family: "VARIANT",
-      text: "VARIANT",
+      family: "XML",
+      text: "XML",
       precision: null,
       scale: null,
       length: null,
     };
     assert.throws(
       () => canonicalProjectToTerraformHcl(invalid),
-      /unsupported type family VARIANT/i,
+      /unsupported type family XML/i,
     );
   });
 
@@ -1070,8 +1070,8 @@ resource "snowflake_table" "default_cases" {
       ],
       [
         "unsupported type",
-        'resource "snowflake_table" "events" { database = "ANALYTICS" schema = "CORE" name = "EVENTS" column { name = "PAYLOAD" type = "VARIANT" } }',
-        /unsupported.*VARIANT/i,
+        'resource "snowflake_table" "events" { database = "ANALYTICS" schema = "CORE" name = "EVENTS" column { name = "PAYLOAD" type = "XML" } }',
+        /unsupported.*XML/i,
       ],
       [
         "unsupported table option",

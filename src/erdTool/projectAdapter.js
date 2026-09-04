@@ -195,9 +195,18 @@ const SUPPORTED_TYPE_FAMILIES = new Set([
   "FLOAT",
   "VARCHAR",
   "DATE",
+  "TIME",
   "TIMESTAMP_NTZ",
+  "TIMESTAMP_LTZ",
+  "TIMESTAMP_TZ",
   "BOOLEAN",
   "BINARY",
+  "VARIANT",
+  "OBJECT",
+  "ARRAY",
+  "GEOGRAPHY",
+  "GEOMETRY",
+  "VECTOR",
 ]);
 
 const FALLBACK_X_STEP = 280;
@@ -770,17 +779,27 @@ function canonicalTypeText(family, { precision, scale, length }) {
     case "NUMBER":
       return `NUMBER(${precision}, ${scale})`;
     case "VARCHAR":
-      return `VARCHAR(${length})`;
+      return length === null ? "VARCHAR" : `VARCHAR(${length})`;
     case "DATE":
       return "DATE";
+    case "TIME":
     case "TIMESTAMP_NTZ":
-      return `TIMESTAMP_NTZ(${precision})`;
+    case "TIMESTAMP_LTZ":
+    case "TIMESTAMP_TZ":
+      return `${family}(${precision})`;
     case "BOOLEAN":
       return "BOOLEAN";
     case "FLOAT":
       return "FLOAT";
     case "BINARY":
       return `BINARY(${length})`;
+    case "VARIANT":
+    case "OBJECT":
+    case "ARRAY":
+    case "GEOGRAPHY":
+    case "GEOMETRY":
+    case "VECTOR":
+      return family;
     default:
       fail(`unsupported type family ${family}`);
   }
@@ -805,24 +824,26 @@ function assertTypeBounds(family, { precision, scale, length }, label) {
       fail(`${label}: scale must be between 0 and ${maxScale} for NUMBER`);
     }
   } else if (family === "VARCHAR") {
-    if (length === null) {
-      fail(`${label}: length is required for VARCHAR`);
-    }
     if (precision !== null || scale !== null) {
       fail(`${label}: precision and scale must be null for VARCHAR`);
     }
-    if (length < 1 || length > 16777216) {
+    if (length !== null && (length < 1 || length > 16777216)) {
       fail(`${label}: length must be between 1 and 16777216 for VARCHAR`);
     }
-  } else if (family === "TIMESTAMP_NTZ") {
+  } else if (
+    family === "TIMESTAMP_NTZ" ||
+    family === "TIMESTAMP_LTZ" ||
+    family === "TIMESTAMP_TZ" ||
+    family === "TIME"
+  ) {
     if (precision === null) {
-      fail(`${label}: precision is required for TIMESTAMP_NTZ`);
+      fail(`${label}: precision is required for ${family}`);
     }
     if (scale !== null || length !== null) {
-      fail(`${label}: scale and length must be null for TIMESTAMP_NTZ`);
+      fail(`${label}: scale and length must be null for ${family}`);
     }
     if (precision < 0 || precision > 9) {
-      fail(`${label}: precision must be between 0 and 9 for TIMESTAMP_NTZ`);
+      fail(`${label}: precision must be between 0 and 9 for ${family}`);
     }
   } else if (family === "BINARY") {
     if (length === null) {
@@ -834,7 +855,17 @@ function assertTypeBounds(family, { precision, scale, length }, label) {
     if (length < 1 || length > 8388608) {
       fail(`${label}: length must be between 1 and 8388608 for BINARY`);
     }
-  } else if (family === "DATE" || family === "BOOLEAN" || family === "FLOAT") {
+  } else if (
+    family === "DATE" ||
+    family === "BOOLEAN" ||
+    family === "FLOAT" ||
+    family === "VARIANT" ||
+    family === "OBJECT" ||
+    family === "ARRAY" ||
+    family === "GEOGRAPHY" ||
+    family === "GEOMETRY" ||
+    family === "VECTOR"
+  ) {
     if (precision !== null || scale !== null || length !== null) {
       fail(`${label}: precision, scale, and length must be null for ${family}`);
     }
@@ -870,10 +901,18 @@ function fieldSizeFromDataType(dataType) {
   if (dataType.family === "NUMBER") {
     return `${dataType.precision},${dataType.scale}`;
   }
-  if (dataType.family === "VARCHAR" || dataType.family === "BINARY") {
+  if (dataType.family === "VARCHAR") {
+    return dataType.length === null ? "" : dataType.length;
+  }
+  if (dataType.family === "BINARY") {
     return dataType.length;
   }
-  if (dataType.family === "TIMESTAMP_NTZ") {
+  if (
+    dataType.family === "TIMESTAMP_NTZ" ||
+    dataType.family === "TIMESTAMP_LTZ" ||
+    dataType.family === "TIMESTAMP_TZ" ||
+    dataType.family === "TIME"
+  ) {
     return dataType.precision;
   }
   return undefined;
@@ -910,21 +949,34 @@ function dataTypeFromField(field) {
     if (!Number.isInteger(precision) || !Number.isInteger(scale)) {
       fail(`NUMBER field ${field.name} size must be integers`);
     }
-  } else if (family === "VARCHAR" || family === "BINARY") {
+  } else if (family === "VARCHAR") {
+    if (size !== undefined && size !== null && size !== "") {
+      length = Number(size);
+      if (!Number.isInteger(length)) {
+        fail(`VARCHAR field ${field.name} size must be an integer`);
+      }
+    }
+  } else if (family === "BINARY") {
     if (size === undefined || size === null || size === "") {
-      fail(`${family} field ${field.name} requires size`);
+      fail(`BINARY field ${field.name} requires size`);
     }
     length = Number(size);
     if (!Number.isInteger(length)) {
-      fail(`${family} field ${field.name} size must be an integer`);
+      fail(`BINARY field ${field.name} size must be an integer`);
     }
-  } else if (family === "TIMESTAMP_NTZ") {
+  } else if (
+    family === "TIMESTAMP_NTZ" ||
+    family === "TIMESTAMP_LTZ" ||
+    family === "TIMESTAMP_TZ" ||
+    family === "TIME"
+  ) {
     if (size === undefined || size === null || size === "") {
-      fail(`TIMESTAMP_NTZ field ${field.name} requires size`);
-    }
-    precision = Number(size);
-    if (!Number.isInteger(precision)) {
-      fail(`TIMESTAMP_NTZ field ${field.name} size must be an integer`);
+      precision = 9;
+    } else {
+      precision = Number(size);
+      if (!Number.isInteger(precision)) {
+        fail(`${family} field ${field.name} size must be an integer`);
+      }
     }
   } else if (size !== undefined && size !== null && size !== "") {
     fail(`${family} field ${field.name} must remain parameterless`);
@@ -2336,13 +2388,41 @@ function parseSnowflakeDataType(value) {
     if (args.length !== 2) fail("NUMBER requires precision and scale");
     precision = Number(args[0]);
     scale = Number(args[1]);
-  } else if (family === "VARCHAR" || family === "BINARY") {
-    if (args.length !== 1) fail(`${family} requires length`);
+  } else if (family === "VARCHAR") {
+    if (args.length === 1) {
+      length = Number(args[0]);
+    } else if (args.length === 0) {
+      length = null;
+    } else {
+      fail("VARCHAR accepts at most 1 argument");
+    }
+  } else if (family === "BINARY") {
+    if (args.length !== 1) fail("BINARY requires length");
     length = Number(args[0]);
-  } else if (family === "TIMESTAMP_NTZ") {
-    if (args.length !== 1) fail("TIMESTAMP_NTZ requires precision");
-    precision = Number(args[0]);
-  } else if (family === "DATE" || family === "BOOLEAN" || family === "FLOAT") {
+  } else if (
+    family === "TIMESTAMP_NTZ" ||
+    family === "TIMESTAMP_LTZ" ||
+    family === "TIMESTAMP_TZ" ||
+    family === "TIME"
+  ) {
+    if (args.length === 1) {
+      precision = Number(args[0]);
+    } else if (args.length === 0) {
+      precision = 9;
+    } else {
+      fail(`${family} accepts at most 1 argument`);
+    }
+  } else if (
+    family === "DATE" ||
+    family === "BOOLEAN" ||
+    family === "FLOAT" ||
+    family === "VARIANT" ||
+    family === "OBJECT" ||
+    family === "ARRAY" ||
+    family === "GEOGRAPHY" ||
+    family === "GEOMETRY" ||
+    family === "VECTOR"
+  ) {
     if (args.length !== 0) fail(`${family} does not support parameters`);
   } else {
     fail(`unsupported type family ${family}`);
@@ -2837,3 +2917,66 @@ export function renderCanonicalSnowflakeDDL(projectOrModel) {
 
   return `${lines.join("\n")}\n`;
 }
+
+export function renderCanonicalSnowflakeStatements(
+  projectOrModel,
+  options = {},
+) {
+  let model;
+  if (
+    isPlainObject(projectOrModel) &&
+    "physical_model" in projectOrModel &&
+    "project_version" in projectOrModel
+  ) {
+    model = validatePhysicalModel(projectOrModel.physical_model);
+  } else {
+    model = validatePhysicalModel(projectOrModel);
+  }
+
+  const { databaseOverride, schemaOverride, replace = false } = options;
+  const statements = [];
+  const catalogs = [
+    ...new Set(model.namespaces.map((ns) => databaseOverride || ns.catalog)),
+  ].sort();
+  for (const catalog of catalogs) {
+    statements.push(`CREATE DATABASE IF NOT EXISTS ${catalog};`);
+  }
+  for (const namespace of model.namespaces) {
+    const db = databaseOverride || namespace.catalog;
+    const sch = schemaOverride || namespace.schema;
+    statements.push(`CREATE SCHEMA IF NOT EXISTS ${db}.${sch};`);
+  }
+
+  const ddlTables = model.tables;
+  ddlTables.forEach((table) => {
+    const namespace = namespaceForTable(model, table);
+    const db = databaseOverride || namespace.catalog;
+    const sch = schemaOverride || namespace.schema;
+    const createPrefix = replace
+      ? "CREATE OR REPLACE TABLE"
+      : "CREATE TABLE IF NOT EXISTS";
+    const lines = [`${createPrefix} ${db}.${sch}.${table.name} (`];
+    const bodyLines = [
+      ...table.columns.map((column) => `    ${renderColumn(column)}`),
+      ...table.constraints
+        .filter((constraint) => constraint.kind !== "foreign_key")
+        .map((constraint) => `    ${renderInlineConstraint(constraint, table)}`),
+    ];
+    bodyLines.forEach((bodyLine, bodyIndex) => {
+      const suffix = bodyIndex < bodyLines.length - 1 ? "," : "";
+      lines.push(`${bodyLine}${suffix}`);
+    });
+    if (table.comment !== null) {
+      lines.push(`) COMMENT=${sqlStringLiteral(table.comment)};`);
+    } else {
+      lines.push(");");
+    }
+    statements.push(lines.join("\n"));
+  });
+
+  const fkAlters = foreignKeyAlterStatements(model, ddlTables);
+  statements.push(...fkAlters);
+
+  return statements;
+}
+

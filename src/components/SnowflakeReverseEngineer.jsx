@@ -3,6 +3,8 @@ import {
   Banner,
   Button,
   Modal,
+  Radio,
+  RadioGroup,
   Select,
   Spin,
   Typography,
@@ -13,6 +15,7 @@ import {
   disconnectDesktopSnowflake,
   listDesktopConnections,
   listDesktopSnowflakeDatabases,
+  listDesktopSnowflakeProfiles,
   listDesktopSnowflakeSchemas,
   listDesktopSnowflakeTables,
   reverseEngineerDesktopSnowflake,
@@ -21,9 +24,14 @@ import { layoutDiagram } from "../erdTool/elkLayout";
 import { snowflakeMetadataToDiagram } from "../erdTool/snowflakeMetadata";
 
 function messageFor(error, fallback) {
-  return typeof error?.message === "string" && error.message.trim()
-    ? error.message
-    : fallback;
+  const text = typeof error?.message === "string" ? error.message.trim() : "";
+  if (!text) return fallback;
+  return (
+    text
+      .replace(/^Error invoking remote method '[^']+':\s*Error:\s*/i, "")
+      .replace(/^Error:\s*/i, "")
+      .trim() || fallback
+  );
 }
 
 function selectOptions(items) {
@@ -49,6 +57,7 @@ export default function SnowflakeReverseEngineer({
   const [database, setDatabase] = useState("");
   const [schema, setSchema] = useState("");
   const [selectedTables, setSelectedTables] = useState([]);
+  const [importMode, setImportMode] = useState("replace");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -61,24 +70,65 @@ export default function SnowflakeReverseEngineer({
     if (!visible) return undefined;
     let active = true;
     setError("");
-    void listDesktopConnections()
-      .then((foundProfiles) => {
+
+    Promise.allSettled([
+      listDesktopConnections(),
+      listDesktopSnowflakeProfiles(),
+    ])
+      .then(([savedResult, cliResult]) => {
         if (!active) return;
-        const snowflakeProfiles = foundProfiles.filter(
-          (profile) =>
-            profile.provider === "snowflake" &&
-            profile.capabilities?.reverseEngineering,
-        );
-        setProfiles(snowflakeProfiles);
-        if (snowflakeProfiles.length) {
-          setProfileId(snowflakeProfiles[0].id);
+        const saved =
+          savedResult.status === "fulfilled" && Array.isArray(savedResult.value)
+            ? savedResult.value
+                .filter(
+                  (profile) =>
+                    profile.provider === "snowflake" &&
+                    profile.capabilities?.reverseEngineering,
+                )
+                .map((profile) => ({
+                  id: profile.id,
+                  name: `${profile.name} (Saved)`,
+                  rawName: profile.name,
+                  type: "saved",
+                  settings: profile.settings || {},
+                }))
+            : [];
+
+        const cli =
+          cliResult.status === "fulfilled" && Array.isArray(cliResult.value)
+            ? cliResult.value.map((profile) => ({
+                id: `cli:${profile.name}`,
+                name: profile.isDefault
+                  ? `${profile.name} (CLI default)`
+                  : `${profile.name} (CLI)`,
+                rawName: profile.name,
+                type: "cli",
+                settings: {
+                  account: profile.account ?? "",
+                  username: profile.username ?? "",
+                  authenticator: profile.authenticator ?? "SNOWFLAKE",
+                  warehouse: profile.warehouse ?? "",
+                  role: profile.role ?? "",
+                  database: profile.database ?? "",
+                  schema: profile.schema ?? "",
+                },
+              }))
+            : [];
+
+        const merged = [...saved, ...cli];
+        setProfiles(merged);
+        if (merged.length) {
+          setProfileId(merged[0].id);
         }
       })
       .catch((profileError) => {
         if (active) {
-          setError(messageFor(profileError, "Could not discover Snowflake profiles."));
+          setError(
+            messageFor(profileError, "Could not discover Snowflake profiles."),
+          );
         }
       });
+
     return () => {
       active = false;
     };
@@ -174,10 +224,16 @@ export default function SnowflakeReverseEngineer({
     setBusy(true);
     setError("");
     try {
-      const request = {
-        mode: "savedProfile",
-        profileId,
-      };
+      const request =
+        selectedProfile?.type === "cli"
+          ? {
+              mode: "profile",
+              profileName: selectedProfile.rawName,
+            }
+          : {
+              mode: "savedProfile",
+              profileId: selectedProfile?.id ?? profileId,
+            };
       const connectedSession = await connectDesktopSnowflake(request);
       setSession(connectedSession);
       const foundDatabases = await listDesktopSnowflakeDatabases(
@@ -237,7 +293,7 @@ export default function SnowflakeReverseEngineer({
         title: `${database}.${schema}`,
       });
       diagram.tables = await layoutDiagram(diagram.tables, diagram.relationships);
-      const imported = await onImport(diagram);
+      const imported = await onImport(diagram, { mode: importMode });
       if (imported !== false) await close();
     } catch (importError) {
       setError(
@@ -280,10 +336,13 @@ export default function SnowflakeReverseEngineer({
             {profiles.length > 0 && (
               <div className="grid grid-cols-1 gap-3">
                 <label className="space-y-1 text-sm">
-                  <span className="font-medium">Saved connection</span>
+                  <span className="font-medium">Connection / Profile</span>
                   <Select
                     value={profileId}
-                    onChange={setProfileId}
+                    onChange={(val) => {
+                      setProfileId(val);
+                      setError("");
+                    }}
                     optionList={profiles.map((profile) => ({
                       value: profile.id,
                       label: profile.name,
@@ -297,11 +356,11 @@ export default function SnowflakeReverseEngineer({
             {selectedProfile ? (
               <div className="rounded-md border border-gray-200 p-3 dark:border-gray-700">
                 <div className="font-medium">
-                  {selectedProfile.settings.account}
+                  {selectedProfile.settings.account || selectedProfile.name}
                 </div>
                 <div className="mt-1 text-sm text-gray-500">
-                  {selectedProfile.settings.username} ·{" "}
-                  {selectedProfile.settings.authenticator}
+                  {selectedProfile.settings.username || "default user"} ·{" "}
+                  {selectedProfile.settings.authenticator || "SNOWFLAKE"}
                   {selectedProfile.settings.warehouse
                     ? ` · ${selectedProfile.settings.warehouse}`
                     : ""}
@@ -312,14 +371,15 @@ export default function SnowflakeReverseEngineer({
               </div>
             ) : (
               <div className="rounded-md border border-gray-200 p-4 text-sm text-gray-500 dark:border-gray-700">
-                Add a Snowflake connection from the Connections menu before
-                reverse engineering live metadata.
+                Add a Snowflake connection from the Connections menu or
+                configure a profile in ~/.snowflake/config.toml before reverse
+                engineering live metadata.
               </div>
             )}
             <Typography.Text type="tertiary" size="small">
-              Saved connections live only behind Electron&apos;s main-process
-              bridge. Passwords, keys, and session tokens are never stored in
-              ERD project files.
+              Connections live only behind Electron&apos;s main-process bridge.
+              Passwords, keys, and session tokens are never stored in ERD project
+              files.
             </Typography.Text>
           </>
         ) : (
@@ -362,6 +422,20 @@ export default function SnowflakeReverseEngineer({
                   disabled={!database}
                 />
               </label>
+            </div>
+
+            <div className="flex items-center gap-3 text-sm py-1">
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                Import Mode:
+              </span>
+              <RadioGroup
+                value={importMode}
+                onChange={(e) => setImportMode(e.target.value)}
+                direction="horizontal"
+              >
+                <Radio value="replace">Replace diagram</Radio>
+                <Radio value="merge">Add to diagram</Radio>
+              </RadioGroup>
             </div>
 
             <div className="rounded-md border border-gray-200 dark:border-gray-700">

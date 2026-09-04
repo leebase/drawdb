@@ -192,10 +192,10 @@ describe("SS-014 logical schema proposals", () => {
     );
 
     const unsupported = proposedModel();
-    unsupported.tables[1].columns[0].type = "VARIANT";
+    unsupported.tables[1].columns[0].type = "BLOB";
     assert.throws(
       () => validateLogicalModel(unsupported, "snowflake"),
-      /unsupported snowflake type VARIANT/,
+      /unsupported snowflake type BLOB/,
     );
 
     const duplicate = proposedModel();

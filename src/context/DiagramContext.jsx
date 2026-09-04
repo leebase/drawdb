@@ -35,34 +35,80 @@ export default function DiagramContextProvider({ children }) {
     [emitDelta, isApplyingRemoteRef],
   );
 
+  const [targetNamespace, setTargetNamespace] = useState({
+    catalog: "MODEL",
+    schema: "PUBLIC",
+  });
+
+  const getTargetNamespace = useCallback(() => {
+    if (
+      tables[0]?.namespace &&
+      typeof tables[0].namespace.catalog === "string" &&
+      typeof tables[0].namespace.schema === "string"
+    ) {
+      return {
+        catalog: tables[0].namespace.catalog,
+        schema: tables[0].namespace.schema,
+      };
+    }
+    return targetNamespace;
+  }, [tables, targetNamespace]);
+
+  const updateTargetNamespace = useCallback((nextNs) => {
+    const catalog = (nextNs?.catalog || "MODEL").trim().toUpperCase();
+    const schema = (nextNs?.schema || "PUBLIC").trim().toUpperCase();
+    const ns = {
+      id: `namespace:${catalog}.${schema}`,
+      catalog,
+      schema,
+    };
+    setTargetNamespace({ catalog, schema });
+    setTables((prev) =>
+      prev.map((t) => ({
+        ...t,
+        namespace: ns,
+      })),
+    );
+  }, []);
+
   const addTable = (data, addToHistory = true) => {
     const id = nanoid();
+    const activeNs = getTargetNamespace();
     const snowflakeNamespace =
       database === DB.SNOWFLAKE
-        ? tables[0]?.namespace &&
-          typeof tables[0].namespace.catalog === "string" &&
-          typeof tables[0].namespace.schema === "string"
-          ? {
-              id: tables[0].namespace.id || `namespace:${tables[0].namespace.catalog}.${tables[0].namespace.schema}`,
-              catalog: tables[0].namespace.catalog,
-              schema: tables[0].namespace.schema,
-            }
-          : {
-              id: "namespace:MODEL.PUBLIC",
-              catalog: "MODEL",
-              schema: "PUBLIC",
-            }
+        ? {
+            id: `namespace:${activeNs.catalog}.${activeNs.schema}`,
+            catalog: activeNs.catalog,
+            schema: activeNs.schema,
+          }
         : undefined;
+    let tableName = `table_${id}`;
+    if (database === DB.SNOWFLAKE) {
+      let index = tables.length + 1;
+      while (tables.some((t) => t.name === `TABLE_${index}`)) {
+        index += 1;
+      }
+      tableName = `TABLE_${index}`;
+    }
+    let posX = transform.pan.x;
+    let posY = transform.pan.y;
+    while (
+      tables.some((t) => Math.abs(t.x - posX) < 24 && Math.abs(t.y - posY) < 24)
+    ) {
+      posX += 32;
+      posY += 32;
+    }
+
     const newTable = {
       id,
-      name: `table_${id}`,
-      x: transform.pan.x,
-      y: transform.pan.y,
+      name: tableName,
+      x: posX,
+      y: posY,
       locked: false,
       fields: [
         database === DB.SNOWFLAKE
           ? {
-              name: "id",
+              name: "ID",
               type: "NUMBER",
               size: "38,0",
               default: "",
@@ -362,6 +408,8 @@ export default function DiagramContextProvider({ children }) {
         updateRelationship,
         database,
         setDatabase,
+        targetNamespace: getTargetNamespace(),
+        updateTargetNamespace,
         tablesCount: tables.length,
         relationshipsCount: relationships.length,
       }}

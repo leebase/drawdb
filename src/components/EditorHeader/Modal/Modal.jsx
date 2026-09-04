@@ -1,4 +1,5 @@
-import { Image, Input, Modal as SemiUIModal, Spin } from "@douyinfe/semi-ui";
+import { Button, Image, Input, Modal as SemiUIModal, Spin, Toast } from "@douyinfe/semi-ui";
+import { IconCopy, IconTick } from "@douyinfe/semi-icons";
 import { saveAs } from "file-saver";
 import { Parser } from "node-sql-parser";
 import { Parser as OracleParser } from "oracle-sql-parser";
@@ -34,6 +35,8 @@ import Open from "./Open";
 import Rename from "./Rename";
 import SetTableWidth from "./SetTableWidth";
 import Share from "./Share";
+import SnowflakeDeployModal from "../../SnowflakeDeployModal";
+import { hasDesktopSnowflake } from "../../../erdTool/desktopBridge";
 import { mergeCustomTypes } from "../../../utils/customTypes";
 import { openRoute } from "../../../utils/openRoute";
 
@@ -59,12 +62,20 @@ export default function Modal({
   onNativeDdlExport,
 }) {
   const { t, i18n } = useTranslation();
-  const { setTables, setRelationships, database, setDatabase } = useDiagram();
+  const {
+    setTables,
+    setRelationships,
+    database,
+    setDatabase,
+    tables,
+    relationships,
+    targetNamespace,
+  } = useDiagram();
   const { setNotes } = useNotes();
   const { setAreas } = useAreas();
   const { setTypes } = useTypes();
   const { setEnums } = useEnums();
-  const { setTransform } = useTransform();
+  const { transform, setTransform } = useTransform();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { settings, setSettings } = useSettings();
   const [uncontrolledTitle, setUncontrolledTitle] = useState(title);
@@ -84,11 +95,21 @@ export default function Modal({
   const [selectedTemplateId, setSelectedTemplateId] = useState(-1);
   const [selectedDiagramId, setSelectedDiagramId] = useState(0);
   const [saveAsTitle, setSaveAsTitle] = useState(title);
+  const [copiedDdl, setCopiedDdl] = useState(false);
+  const [deployVisible, setDeployVisible] = useState(false);
   const navigate = useNavigateWithParams();
 
   useEffect(() => {
     if (modal === MODAL.SAVEAS) setSaveAsTitle(title);
   }, [modal, title]);
+
+  const handleCopyDdl = () => {
+    if (!exportData.data) return;
+    navigator.clipboard.writeText(exportData.data);
+    setCopiedDdl(true);
+    Toast.success(exportData.extension === "sql" ? "DDL copied to clipboard" : "Copied to clipboard");
+    setTimeout(() => setCopiedDdl(false), 2000);
+  };
 
   const overwriteDiagram = () => {
     setTables(importData.tables);
@@ -426,8 +447,62 @@ export default function Modal({
           modal === MODAL.CODE || modal === MODAL.IMG ? "hidden" : "auto",
         direction: "ltr",
       }}
+      footer={
+        modal === MODAL.CODE ? (
+          <div className="flex items-center justify-between w-full">
+            <div className="flex items-center gap-2">
+              <Button
+                data-testid="erd-copy-ddl"
+                icon={copiedDdl ? <IconTick /> : <IconCopy />}
+                onClick={handleCopyDdl}
+                theme="light"
+              >
+                {exportData.extension === "sql" ? "Copy DDL" : t("copy")}
+              </Button>
+              {exportData.extension === "sql" &&
+                database === DB.SNOWFLAKE &&
+                hasDesktopSnowflake() && (
+                  <Button
+                    data-testid="erd-deploy-ddl"
+                    type="primary"
+                    theme="solid"
+                    onClick={() => setDeployVisible(true)}
+                  >
+                    Deploy to Snowflake…
+                  </Button>
+                )}
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={() => setModal(MODAL.NONE)}>
+                {t("cancel")}
+              </Button>
+              <Button
+                theme="solid"
+                onClick={getModalOnOk}
+                disabled={!exportData.data}
+              >
+                {getOkText(modal)}
+              </Button>
+            </div>
+          </div>
+        ) : undefined
+      }
     >
       {getModalBody()}
+      {hasDesktopSnowflake() && (
+        <SnowflakeDeployModal
+          visible={deployVisible}
+          onClose={() => setDeployVisible(false)}
+          diagram={{
+            database: DB.SNOWFLAKE,
+            title,
+            tables,
+            relationships,
+            transform,
+            targetNamespace,
+          }}
+        />
+      )}
     </SemiUIModal>
   );
 }
