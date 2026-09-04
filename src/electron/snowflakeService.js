@@ -5,6 +5,8 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 
+import { canonicalizeSnowflakeType } from "../erdTool/snowflakeTypeContract.js";
+
 const require = createRequire(
   typeof __filename === "string" ? __filename : import.meta.url,
 );
@@ -55,29 +57,6 @@ const MAXIMUM_SELECTION_SIZE = 500;
 const QUERY_TIMEOUT_MS = 90_000;
 const CONNECT_TIMEOUT_MS = 150_000;
 const CANONICAL_IDENTIFIER = /^[A-Z_][A-Z0-9_$]*$/;
-const SNOWFLAKE_TYPE_ALIASES = new Map([
-  ["DECIMAL", "NUMBER"],
-  ["DEC", "NUMBER"],
-  ["NUMERIC", "NUMBER"],
-  ["INT", "NUMBER"],
-  ["INTEGER", "NUMBER"],
-  ["BIGINT", "NUMBER"],
-  ["SMALLINT", "NUMBER"],
-  ["TINYINT", "NUMBER"],
-  ["BYTEINT", "NUMBER"],
-  ["FIXED", "NUMBER"],
-  ["TEXT", "VARCHAR"],
-  ["STRING", "VARCHAR"],
-  ["CHAR", "VARCHAR"],
-  ["CHARACTER", "VARCHAR"],
-  ["REAL", "FLOAT"],
-  ["FLOAT4", "FLOAT"],
-  ["FLOAT8", "FLOAT"],
-  ["DOUBLE", "FLOAT"],
-  ["DOUBLE PRECISION", "FLOAT"],
-  ["DATETIME", "TIMESTAMP_NTZ"],
-  ["TIMESTAMP", "TIMESTAMP_NTZ"],
-]);
 const PROFILE_KEYS = new Set([
   "account",
   "user",
@@ -152,10 +131,28 @@ function normalizeRow(row) {
 }
 
 function normalizeColumnType(column) {
-  const dataType = String(column.data_type ?? "").toUpperCase();
+  const rawType = String(column.data_type ?? "").trim();
+  if (!rawType) {
+    fail("SNOWFLAKE_UNSUPPORTED_DATA_TYPE", "Snowflake COLUMNS row is missing DATA_TYPE.");
+  }
+  // FIXED is a driver metadata token, not a user DDL alias.  Normalize this
+  // one token before invoking the shared contract; every other alias and all
+  // defaults/bounds remain owned by snowflakeTypeContract.js.
+  const contractType = rawType.toUpperCase() === "FIXED" ? "NUMBER" : rawType;
+  try {
+    canonicalizeSnowflakeType(contractType, {
+      allowIncompleteVector: true,
+      label: "Snowflake COLUMNS DATA_TYPE",
+    });
+  } catch (error) {
+    fail("SNOWFLAKE_UNSUPPORTED_DATA_TYPE", error.message);
+  }
   return {
     ...column,
-    data_type: SNOWFLAKE_TYPE_ALIASES.get(dataType) ?? dataType,
+    // Preserve the validated metadata token so alias-specific semantics (for
+    // example bare CHAR meaning VARCHAR(1)) survive into the canonical mapper.
+    // FIXED remains the sole metadata-only normalization above.
+    data_type: contractType,
   };
 }
 
@@ -644,6 +641,41 @@ export function createSnowflakeService({
         tableBinds,
         )
       ).map(normalizeColumnType);
+
+      // Snowflake's INFORMATION_SCHEMA.COLUMNS exposes VECTOR as a family
+      // token but does not carry the element type/dimension.  DESCRIBE TABLE
+      // is the narrow, main-owned augmentation seam for those columns.  The
+      // query count is bounded by the already validated table selection and
+      // no SQL supplied by the renderer or renderer-shaped caller reaches it.
+      const vectorTables = new Set(
+        columns
+          .filter(
+            (column) =>
+              canonicalizeSnowflakeType(column.data_type, {
+                allowIncompleteVector: true,
+              }).family === "VECTOR",
+          )
+          .map((column) => column.table_name),
+      );
+      const describeRows = [];
+      for (const table of tables) {
+        if (!vectorTables.has(table)) continue;
+        const tableDescribeRows = await executeRows(
+          connection,
+          `DESCRIBE TABLE ${quoteIdentifier(database, "database")}.${quoteIdentifier(schema, "schema")}.${quoteIdentifier(table, "table")}`,
+        );
+        for (const row of tableDescribeRows) {
+          // Identity is assigned by this validated request, after spreading
+          // the driver row, so a driver-provided field cannot redirect a row
+          // into another selected table during the metadata merge.
+          describeRows.push({
+            ...row,
+            table_catalog: database,
+            table_schema: schema,
+            table_name: table,
+          });
+        }
+      }
       const tableConstraints = await executeRows(
         connection,
         `SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_TYPE FROM ${informationSchema}.TABLE_CONSTRAINTS WHERE ${tableFilter} AND CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY') ORDER BY TABLE_NAME, CONSTRAINT_NAME`,
@@ -741,6 +773,7 @@ export function createSnowflakeService({
         schemata,
         tables: tableRows,
         columns,
+        describeRows,
         tableConstraints: selectedTableConstraints,
         keyColumnUsage,
         referentialConstraints,

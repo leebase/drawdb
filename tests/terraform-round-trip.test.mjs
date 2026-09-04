@@ -353,8 +353,24 @@ resource "snowflake_table_constraint" "analytics_mart_order_header_pk_order_head
 }
 `;
 
-function type(family, text, precision = null, scale = null, length = null) {
-  return { family, text, precision, scale, length };
+function type(
+  family,
+  text,
+  precision = null,
+  scale = null,
+  length = null,
+  element_type = null,
+  dimension = null,
+) {
+  return {
+    family,
+    text,
+    precision,
+    scale,
+    length,
+    element_type,
+    dimension,
+  };
 }
 
 function modelColumn(
@@ -394,9 +410,9 @@ function modelConstraint(catalog, schema, table, name, kind, columnNames) {
 
 function supportedCanonicalProject() {
   return {
-    project_version: "1",
+    project_version: "2",
     physical_model: {
-      model_version: "1",
+      model_version: "2",
       name: "terraform-retail",
       namespaces: [
         { id: "namespace:ANALYTICS.CORE", catalog: "ANALYTICS", schema: "CORE" },
@@ -582,6 +598,52 @@ function moduleFiles() {
     },
   ];
 }
+
+function semanticTypeModule(rows) {
+  const columns = rows
+    .map(
+      ([name, typeExpression]) => `
+  column {
+    name = "${name}"
+    type = "${typeExpression}"
+  }
+`,
+    )
+    .join("");
+  return `
+resource "snowflake_table" "semantic_types" {
+  database = "ANALYTICS"
+  schema   = "CORE"
+  name     = "SEMANTIC_TYPES"
+${columns}}
+`;
+}
+
+const semanticTypeRows = [
+  ["NUMBER_DEFAULT", "NUMBER"],
+  ["DECIMAL_ONE_ARG", "DECIMAL(12)"],
+  ["NUMERIC_TWO_ARGS", "NUMERIC(12, 2)"],
+  ["INTEGER_ALIAS", "INTEGER"],
+  ["FLOAT_ALIAS", "DOUBLE PRECISION"],
+  ["VARCHAR_DEFAULT", "TEXT"],
+  ["CHAR_DEFAULT", "CHAR"],
+  ["VARCHAR_MAX", "NVARCHAR(134217728)"],
+  ["BINARY_DEFAULT", "VARBINARY"],
+  ["BINARY_MAX", "BINARY(67108864)"],
+  ["DATE_TYPE", "DATE"],
+  ["TIME_DEFAULT", "TIME"],
+  ["TIME_ZERO", "TIME(0)"],
+  ["NTZ_ALIAS", "DATETIME(3)"],
+  ["LTZ_ALIAS", "TIMESTAMPLTZ(4)"],
+  ["TZ_ALIAS", "TIMESTAMP WITH TIME ZONE(5)"],
+  ["VARIANT_TYPE", "VARIANT"],
+  ["OBJECT_TYPE", "OBJECT"],
+  ["ARRAY_TYPE", "ARRAY"],
+  ["GEOGRAPHY_TYPE", "GEOGRAPHY"],
+  ["GEOMETRY_TYPE", "GEOMETRY"],
+  ["VECTOR_INT", "VECTOR(INT, 1)"],
+  ["VECTOR_FLOAT_MAX", "VECTOR(FLOAT, 4096)"],
+];
 
 function terraformStateFixture() {
   return JSON.stringify(
@@ -877,6 +939,8 @@ describe("SS-015 Terraform round-trip engineering", () => {
       precision: null,
       scale: null,
       length: null,
+      element_type: null,
+      dimension: null,
     };
     assert.throws(
       () => canonicalProjectToTerraformHcl(invalid),
@@ -919,6 +983,248 @@ describe("SS-015 Terraform round-trip engineering", () => {
     assert.equal(diagram.relationships.length, 1);
     assertNoSecretMaterial(importedAgain);
     assertNoSecretMaterial(savedAgain);
+  });
+
+  it("preserves the complete shared Snowflake type contract through Terraform", async () => {
+    const { terraformHclToCanonicalProject, canonicalProjectToTerraformHcl } =
+      await loadTerraformRoundTrip();
+    const imported = terraformHclToCanonicalProject(
+      semanticTypeModule(semanticTypeRows),
+    );
+    const columns = imported.physical_model.tables[0].columns;
+
+    assert.equal(imported.project_version, "2");
+    assert.equal(imported.physical_model.model_version, "2");
+    assert.deepEqual(
+      columns.map(({ data_type }) => data_type),
+      [
+        type("NUMBER", "NUMBER(38, 0)", 38, 0),
+        type("NUMBER", "NUMBER(12, 0)", 12, 0),
+        type("NUMBER", "NUMBER(12, 2)", 12, 2),
+        type("NUMBER", "NUMBER(38, 0)", 38, 0),
+        type("FLOAT", "FLOAT"),
+        type("VARCHAR", "VARCHAR(16777216)", null, null, 16777216),
+        type("VARCHAR", "VARCHAR(1)", null, null, 1),
+        type("VARCHAR", "VARCHAR(134217728)", null, null, 134217728),
+        type("BINARY", "BINARY(8388608)", null, null, 8388608),
+        type("BINARY", "BINARY(67108864)", null, null, 67108864),
+        type("DATE", "DATE"),
+        type("TIME", "TIME(9)", 9),
+        type("TIME", "TIME(0)", 0),
+        type("TIMESTAMP_NTZ", "TIMESTAMP_NTZ(3)", 3),
+        type("TIMESTAMP_LTZ", "TIMESTAMP_LTZ(4)", 4),
+        type("TIMESTAMP_TZ", "TIMESTAMP_TZ(5)", 5),
+        type("VARIANT", "VARIANT"),
+        type("OBJECT", "OBJECT"),
+        type("ARRAY", "ARRAY"),
+        type("GEOGRAPHY", "GEOGRAPHY"),
+        type("GEOMETRY", "GEOMETRY"),
+        type("VECTOR", "VECTOR(INT, 1)", null, null, null, "INT", 1),
+        type(
+          "VECTOR",
+          "VECTOR(FLOAT, 4096)",
+          null,
+          null,
+          null,
+          "FLOAT",
+          4096,
+        ),
+      ],
+    );
+
+    const rendered = canonicalProjectToTerraformHcl(imported);
+    assert.match(rendered, /type\s*=\s*"NUMBER\(38, 0\)"/);
+    assert.match(rendered, /type\s*=\s*"VARCHAR\(16777216\)"/);
+    assert.match(rendered, /type\s*=\s*"TIMESTAMP_LTZ\(4\)"/);
+    assert.match(rendered, /type\s*=\s*"VECTOR\(INT, 1\)"/);
+    assert.match(rendered, /type\s*=\s*"VECTOR\(FLOAT, 4096\)"/);
+
+    const importedAgain = terraformHclToCanonicalProject(rendered);
+    assert.deepEqual(
+      terraformSemanticSnapshot(importedAgain),
+      terraformSemanticSnapshot(imported),
+    );
+  });
+
+  it("accepts every approved alias through the Terraform boundary", async () => {
+    const { terraformHclToCanonicalProject } = await loadTerraformRoundTrip();
+    const aliases = [
+      ["NUMBER", "NUMBER(38, 0)"],
+      ["DECIMAL(12, 2)", "NUMBER(12, 2)"],
+      ["DEC(12)", "NUMBER(12, 0)"],
+      ["NUMERIC", "NUMBER(38, 0)"],
+      ...["INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "BYTEINT"].map(
+        (alias) => [alias, "NUMBER(38, 0)"],
+      ),
+      ...["FLOAT", "FLOAT4", "FLOAT8", "DOUBLE", "DOUBLE PRECISION", "REAL"].map(
+        (alias) => [alias, "FLOAT"],
+      ),
+      ["BOOLEAN", "BOOLEAN"],
+      ...[
+        "VARCHAR",
+        "STRING",
+        "TEXT",
+        "VARCHAR2",
+        "NVARCHAR",
+        "NVARCHAR2",
+        "CHAR VARYING",
+        "NCHAR VARYING",
+      ].map((alias) => [alias, "VARCHAR(16777216)"]),
+      ...["CHAR", "CHARACTER", "NCHAR"].map((alias) => [alias, "VARCHAR(1)"]),
+      ["BINARY", "BINARY(8388608)"],
+      ["VARBINARY", "BINARY(8388608)"],
+      ["DATE", "DATE"],
+      ["TIME", "TIME(9)"],
+      ...[
+        "TIMESTAMP_NTZ",
+        "TIMESTAMPNTZ",
+        "TIMESTAMP WITHOUT TIME ZONE",
+        "DATETIME",
+      ].map((alias) => [alias, "TIMESTAMP_NTZ(9)"]),
+      ...[
+        "TIMESTAMP_LTZ",
+        "TIMESTAMPLTZ",
+        "TIMESTAMP WITH LOCAL TIME ZONE",
+      ].map((alias) => [alias, "TIMESTAMP_LTZ(9)"]),
+      ...[
+        "TIMESTAMP_TZ",
+        "TIMESTAMPTZ",
+        "TIMESTAMP WITH TIME ZONE",
+      ].map((alias) => [alias, "TIMESTAMP_TZ(9)"]),
+      ...["VARIANT", "OBJECT", "ARRAY", "GEOGRAPHY", "GEOMETRY"].map(
+        (family) => [family, family],
+      ),
+    ];
+
+    const project = terraformHclToCanonicalProject(
+      semanticTypeModule(
+        aliases.map(([expression], index) => [`ALIAS_${index}`, expression]),
+      ),
+    );
+    assert.deepEqual(
+      project.physical_model.tables[0].columns.map(
+        ({ data_type }) => data_type.text,
+      ),
+      aliases.map(([, expected]) => expected),
+    );
+  });
+
+  it("requires explicit mapping for generic TIMESTAMP and preserves each mapping", async () => {
+    const { terraformHclToCanonicalProject, terraformHclToDiagram } =
+      await loadTerraformRoundTrip();
+    const hcl = semanticTypeModule([["GENERIC_TIMESTAMP", "TIMESTAMP(3)"]]);
+
+    assert.throws(
+      () => terraformHclToCanonicalProject(hcl),
+      /generic TIMESTAMP.*explicit.*timestampTypeMapping/i,
+    );
+    for (const mapping of [
+      "TIMESTAMP_NTZ",
+      "TIMESTAMP_LTZ",
+      "TIMESTAMP_TZ",
+    ]) {
+      const project = terraformHclToCanonicalProject(hcl, {
+        timestampTypeMapping: mapping,
+      });
+      assert.deepEqual(project.physical_model.tables[0].columns[0].data_type, {
+        ...type(mapping, `${mapping}(3)`, 3),
+      });
+      const diagram = terraformHclToDiagram(hcl, {
+        title: "timestamp-mapped",
+        timestampTypeMapping: mapping,
+      });
+      assert.equal(diagram.tables[0].fields[0].type, mapping);
+      assert.equal(diagram.tables[0].fields[0].size, 3);
+    }
+    assert.throws(
+      () =>
+        terraformHclToCanonicalProject(hcl, {
+          timestampTypeMapping: "VARCHAR",
+        }),
+      /timestampTypeMapping.*concrete TIMESTAMP variant/i,
+    );
+  });
+
+  it("applies explicit TIMESTAMP mapping while exporting a legacy v1 project", async () => {
+    const { canonicalProjectToTerraformHcl } = await loadTerraformRoundTrip();
+    const project = supportedCanonicalProject();
+    project.project_version = "1";
+    project.physical_model.model_version = "1";
+    for (const table of project.physical_model.tables) {
+      for (const column of table.columns) {
+        const { family, text, precision, scale, length } = column.data_type;
+        column.data_type = { family, text, precision, scale, length };
+      }
+    }
+    project.physical_model.tables[0].columns[0].data_type = {
+      family: "TIMESTAMP",
+      text: "TIMESTAMP(3)",
+      precision: 3,
+      scale: null,
+      length: null,
+    };
+
+    assert.throws(
+      () => canonicalProjectToTerraformHcl(project),
+      /generic TIMESTAMP.*explicit.*timestampTypeMapping/i,
+    );
+    const rendered = canonicalProjectToTerraformHcl(project, {
+      timestampTypeMapping: "TIMESTAMP_LTZ",
+    });
+    assert.match(rendered, /type\s*=\s*"TIMESTAMP_LTZ\(3\)"/);
+
+    const renderedModel = canonicalProjectToTerraformHcl(
+      project.physical_model,
+      { timestampTypeMapping: "TIMESTAMP_LTZ" },
+    );
+    assert.match(renderedModel, /type\s*=\s*"TIMESTAMP_LTZ\(3\)"/);
+  });
+
+  it("rejects unsupported structured/new types and incomplete VECTOR at the Terraform boundary", async () => {
+    const { terraformHclToCanonicalProject, canonicalProjectToTerraformHcl } =
+      await loadTerraformRoundTrip();
+    for (const typeExpression of [
+      "OBJECT(VARCHAR)",
+      "ARRAY(NUMBER)",
+      "MAP(VARCHAR, NUMBER)",
+      "DECFLOAT",
+      "UUID",
+      "VECTOR",
+      "VECTOR(NUMBER, 3)",
+      "VECTOR(FLOAT, 4097)",
+    ]) {
+      assert.throws(
+        () =>
+          terraformHclToCanonicalProject(
+            semanticTypeModule([["UNSUPPORTED", typeExpression]]),
+          ),
+        /unsupported|parameters|VECTOR|dimension/i,
+        typeExpression,
+      );
+    }
+
+    const project = terraformHclToCanonicalProject(
+      semanticTypeModule([["VECTOR_COL", "VECTOR(INT, 3)"]]),
+    );
+    const vector = project.physical_model.tables[0].columns[0].data_type;
+    vector.element_type = null;
+    vector.dimension = null;
+    vector.text = "VECTOR";
+    assert.throws(
+      () => canonicalProjectToTerraformHcl(project),
+      /VECTOR.*(?:element|dimension)|incomplete/i,
+    );
+  });
+
+  it("rejects stale v2 type text instead of exporting it", async () => {
+    const { canonicalProjectToTerraformHcl } = await loadTerraformRoundTrip();
+    const project = supportedCanonicalProject();
+    project.physical_model.tables[0].columns[0].data_type.text =
+      "DECIMAL(38, 0)";
+    assert.throws(
+      () => canonicalProjectToTerraformHcl(project),
+      /text must equal its canonical value/i,
+    );
   });
 
   it("preserves Terraform default expression classification and escaped template text", async () => {

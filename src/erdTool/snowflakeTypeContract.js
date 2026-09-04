@@ -221,7 +221,7 @@ function splitTypeExpression(value, label) {
   if (!text.endsWith(")")) fail("has an unbalanced parameter list", label);
   const name = text.slice(0, open).trim();
   const contents = text.slice(open + 1, -1);
-  if (!name || contents.includes("\n")) {
+  if (!name) {
     fail("is not a supported type expression", label);
   }
   return { name, args: splitArguments(contents, label) };

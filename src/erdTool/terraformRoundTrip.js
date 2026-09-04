@@ -3,21 +3,16 @@ import {
   canonicalProjectToDiagram,
   isSnowflakeDefaultExpression,
 } from "./projectAdapter.js";
+import {
+  assertSnowflakeTypeExportable,
+  canonicalizeSnowflakeType,
+} from "./snowflakeTypeContract.js";
 
-const PROJECT_VERSION = "1";
-const MODEL_VERSION = "1";
+const PROJECT_VERSION = "2";
+const MODEL_VERSION = "2";
 const FALLBACK_X_STEP = 280;
 const FALLBACK_Y = 80;
 const IDENTIFIER_RE = /^[A-Z_][A-Z0-9_$]*$/;
-const TYPE_FAMILIES = new Set([
-  "NUMBER",
-  "FLOAT",
-  "VARCHAR",
-  "DATE",
-  "TIMESTAMP_NTZ",
-  "BOOLEAN",
-  "BINARY",
-]);
 const RESOURCE_TYPES = new Set([
   "snowflake_database",
   "snowflake_schema",
@@ -112,121 +107,6 @@ function requireOnlyKeys(value, allowed, label) {
   for (const key of Object.keys(value)) {
     if (!allowed.has(key)) fail(`unsupported Terraform ${label} attribute ${key}`);
   }
-}
-
-function canonicalTypeText(family, { precision, scale, length }) {
-  switch (family) {
-    case "NUMBER":
-      return `NUMBER(${precision}, ${scale})`;
-    case "VARCHAR":
-      return `VARCHAR(${length})`;
-    case "DATE":
-      return "DATE";
-    case "TIMESTAMP_NTZ":
-      return `TIMESTAMP_NTZ(${precision})`;
-    case "BOOLEAN":
-      return "BOOLEAN";
-    case "FLOAT":
-      return "FLOAT";
-    case "BINARY":
-      return `BINARY(${length})`;
-    default:
-      fail(`unsupported type family ${family}`);
-  }
-}
-
-function assertTypeBounds(family, { precision, scale, length }, label) {
-  if (family === "NUMBER") {
-    if (!Number.isInteger(precision) || !Number.isInteger(scale)) {
-      fail(`${label}: NUMBER requires integer precision and scale`);
-    }
-    if (length !== null) fail(`${label}: length must be null for NUMBER`);
-    if (precision < 1 || precision > 38) {
-      fail(`${label}: precision must be between 1 and 38 for NUMBER`);
-    }
-    const maxScale = Math.min(37, precision);
-    if (scale < 0 || scale > maxScale) {
-      fail(`${label}: scale must be between 0 and ${maxScale} for NUMBER`);
-    }
-    return;
-  }
-  if (family === "VARCHAR") {
-    if (!Number.isInteger(length)) fail(`${label}: VARCHAR requires length`);
-    if (precision !== null || scale !== null) {
-      fail(`${label}: precision and scale must be null for VARCHAR`);
-    }
-    if (length < 1 || length > 16777216) {
-      fail(`${label}: length must be between 1 and 16777216 for VARCHAR`);
-    }
-    return;
-  }
-  if (family === "TIMESTAMP_NTZ") {
-    if (!Number.isInteger(precision)) {
-      fail(`${label}: TIMESTAMP_NTZ requires precision`);
-    }
-    if (scale !== null || length !== null) {
-      fail(`${label}: scale and length must be null for TIMESTAMP_NTZ`);
-    }
-    if (precision < 0 || precision > 9) {
-      fail(`${label}: precision must be between 0 and 9 for TIMESTAMP_NTZ`);
-    }
-    return;
-  }
-  if (family === "BINARY") {
-    if (!Number.isInteger(length)) fail(`${label}: BINARY requires length`);
-    if (precision !== null || scale !== null) {
-      fail(`${label}: precision and scale must be null for BINARY`);
-    }
-    if (length < 1 || length > 8388608) {
-      fail(`${label}: length must be between 1 and 8388608 for BINARY`);
-    }
-    return;
-  }
-  if (family === "DATE" || family === "BOOLEAN" || family === "FLOAT") {
-    if (precision !== null || scale !== null || length !== null) {
-      fail(`${label}: ${family} must not include parameters`);
-    }
-    return;
-  }
-  fail(`unsupported type family ${family}`);
-}
-
-function parseDataType(value) {
-  const text = requireString(value, "column.type").trim();
-  const match = text.match(/^([A-Z_][A-Z0-9_$]*)(?:\s*\(([^()]*)\))?$/i);
-  if (!match) fail(`unsupported Terraform Snowflake data type ${text}`);
-  const family = match[1].toUpperCase();
-  if (!TYPE_FAMILIES.has(family)) {
-    fail(`unsupported Terraform Snowflake data type ${family}`);
-  }
-  const args =
-    match[2] === undefined
-      ? []
-      : match[2].split(",").map((part) => part.trim());
-  let precision = null;
-  let scale = null;
-  let length = null;
-  if (family === "NUMBER") {
-    if (args.length !== 2) fail("NUMBER requires precision and scale");
-    precision = Number(args[0]);
-    scale = Number(args[1]);
-  } else if (family === "VARCHAR" || family === "BINARY") {
-    if (args.length !== 1) fail(`${family} requires length`);
-    length = Number(args[0]);
-  } else if (family === "TIMESTAMP_NTZ") {
-    if (args.length !== 1) fail("TIMESTAMP_NTZ requires precision");
-    precision = Number(args[0]);
-  } else if (args.length !== 0) {
-    fail(`${family} does not support parameters`);
-  }
-  assertTypeBounds(family, { precision, scale, length }, `data type ${family}`);
-  return {
-    family,
-    text: canonicalTypeText(family, { precision, scale, length }),
-    precision,
-    scale,
-    length,
-  };
 }
 
 function decodeQuotedString(source, start) {
@@ -748,7 +628,7 @@ function resolveTableNamespace(object, databases, schemas, index) {
   return { id: namespaceId(catalog, schema), catalog, schema };
 }
 
-function buildColumn(block, namespace, tableName, ordinal) {
+function buildColumn(block, namespace, tableName, ordinal, options = {}) {
   if (block.labels.length) fail("Terraform column blocks must not have labels");
   const object = entriesToObject(block.body, "column");
   requireOnlyKeys(object, COLUMN_KEYS, "column");
@@ -768,11 +648,18 @@ function buildColumn(block, namespace, tableName, ordinal) {
     }
     defaultValue = valueToString(defaultObject[keys[0]], `column ${name} default`);
   }
+  const dataType = canonicalizeSnowflakeType(
+    valueToString(object.type, "column.type"),
+    {
+      timestampTypeMapping: options.timestampTypeMapping,
+      label: `column ${name} data type`,
+    },
+  );
   return {
     id: columnId(namespace.catalog, namespace.schema, tableName, name),
     name,
     ordinal,
-    data_type: parseDataType(valueToString(object.type, "column.type")),
+    data_type: dataType,
     nullable:
       object.nullable === undefined
         ? true
@@ -782,7 +669,7 @@ function buildColumn(block, namespace, tableName, ordinal) {
   };
 }
 
-function buildTables(index, databases, schemas, namespaces) {
+function buildTables(index, databases, schemas, namespaces, options = {}) {
   const namespaceById = new Map(namespaces.map((namespace) => [namespace.id, namespace]));
   const tables = [];
   const tablesByResourceName = new Map();
@@ -802,7 +689,7 @@ function buildTables(index, databases, schemas, namespaces) {
     const columnBlocks = blockList(object, "column");
     if (columnBlocks.length === 0) fail(`Terraform table ${name} must have columns`);
     const columns = columnBlocks.map((block, index) =>
-      buildColumn(block, namespace, name, index + 1),
+      buildColumn(block, namespace, name, index + 1, options),
     );
     if (new Set(columns.map((column) => column.name)).size !== columns.length) {
       fail(`duplicate Terraform column in table ${name}`);
@@ -982,7 +869,7 @@ export function terraformHclToCanonicalProject(input, options = {}) {
     tables,
     tablesByResourceName,
     tablesByObjectKey,
-  } = buildTables(index, databases, schemas, schemaNamespaces);
+  } = buildTables(index, databases, schemas, schemaNamespaces, options);
 
   for (const resource of index.get("snowflake_table_constraint")?.values() ?? []) {
     const { sourceTable, constraint } = buildConstraint(
@@ -1029,6 +916,7 @@ export function terraformHclToDiagram(input, options = {}) {
       typeof options.title === "string" && options.title.trim()
         ? options.title.trim()
         : options.name,
+    timestampTypeMapping: options.timestampTypeMapping,
   });
   return {
     ...canonicalProjectToDiagram(project),
@@ -1088,16 +976,37 @@ function tableById(model, tableObjectId) {
   return table;
 }
 
-function validateProjectOrModel(projectOrModel) {
+function validateProjectOrModel(projectOrModel, options = {}) {
   const normalizeModel = (model) => ({
     ...model,
     namespaces: sortById(model.namespaces ?? []),
     tables: sortById(model.tables ?? []).map((table) => ({
       ...table,
+      columns: [...(table.columns ?? [])],
       constraints: sortById(table.constraints ?? []),
     })),
     relationships: sortById(model.relationships ?? []),
   });
+
+  const canonicalizeModelTypes = (model) => {
+    const legacy = model.model_version === "1";
+    return {
+      ...model,
+      model_version: MODEL_VERSION,
+      tables: model.tables.map((table) => ({
+        ...table,
+        columns: table.columns.map((column) => ({
+          ...column,
+          data_type: (legacy
+            ? canonicalizeSnowflakeType
+            : assertSnowflakeTypeExportable)(column.data_type, {
+            timestampTypeMapping: options.timestampTypeMapping,
+            label: `table ${table.name} column ${column.name} data type`,
+          }),
+        })),
+      })),
+    };
+  };
 
   if (
     isPlainObject(projectOrModel) &&
@@ -1118,38 +1027,44 @@ function validateProjectOrModel(projectOrModel) {
         y: 0,
       };
     }
-    canonicalProjectToDiagram({
-      project_version: projectOrModel.project_version,
-      physical_model: model,
-      diagram_layout: {
-        nodes,
-        viewport: projectOrModel.diagram_layout?.viewport ?? {
-          x: 0,
-          y: 0,
-          zoom: 1,
+    canonicalProjectToDiagram(
+      {
+        project_version: projectOrModel.project_version,
+        physical_model: model,
+        diagram_layout: {
+          nodes,
+          viewport: projectOrModel.diagram_layout?.viewport ?? {
+            x: 0,
+            y: 0,
+            zoom: 1,
+          },
         },
       },
-    });
-    return model;
+      { timestampTypeMapping: options.timestampTypeMapping },
+    );
+    return canonicalizeModelTypes(model);
   }
   const model = normalizeModel(projectOrModel);
   const nodes = {};
   for (const table of model?.tables ?? []) {
     nodes[table.id] = { x: 0, y: 0 };
   }
-  canonicalProjectToDiagram({
-    project_version: PROJECT_VERSION,
-    physical_model: model,
-    diagram_layout: {
-      nodes,
-      viewport: { x: 0, y: 0, zoom: 1 },
+  canonicalProjectToDiagram(
+    {
+      project_version: PROJECT_VERSION,
+      physical_model: model,
+      diagram_layout: {
+        nodes,
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
     },
-  });
-  return model;
+    { timestampTypeMapping: options.timestampTypeMapping },
+  );
+  return canonicalizeModelTypes(model);
 }
 
-export function canonicalProjectToTerraformHcl(projectOrModel) {
-  const model = validateProjectOrModel(projectOrModel);
+export function canonicalProjectToTerraformHcl(projectOrModel, options = {}) {
+  const model = validateProjectOrModel(projectOrModel, options);
   const databaseItems = [...new Set(model.namespaces.map((ns) => ns.catalog))]
     .sort()
     .map((catalog) => ({ id: `database:${catalog}`, catalog }));

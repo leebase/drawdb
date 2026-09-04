@@ -552,21 +552,31 @@ describe("SS-005 Snowflake DDL export", () => {
         ),
       /quoted identifiers/i,
     );
-    // Alias and VECTOR grammar expansion belongs to Ticket 2A-2. The shared
-    // type contract can model them without silently widening this boundary.
-    assert.throws(
-      () =>
-        parseSnowflakeDDLToCanonicalProject(
-          "CREATE TABLE ANALYTICS.CORE.EVENTS (ID DECIMAL(12, 2));",
-        ),
-      /unsupported type family DECIMAL/i,
+    const aliases = parseSnowflakeDDLToCanonicalProject(
+      "CREATE TABLE ANALYTICS.CORE.EVENTS (ID DECIMAL(12, 2), EMBEDDING VECTOR(FLOAT, 256));",
     );
-    assert.throws(
-      () =>
-        parseSnowflakeDDLToCanonicalProject(
-          "CREATE TABLE ANALYTICS.CORE.EVENTS (EMBEDDING VECTOR(FLOAT, 256));",
-        ),
-      /Ticket 2A-2|VECTOR/i,
+    assert.deepEqual(
+      aliases.physical_model.tables[0].columns.map((column) => column.data_type),
+      [
+        {
+          family: "NUMBER",
+          text: "NUMBER(12, 2)",
+          precision: 12,
+          scale: 2,
+          length: null,
+          element_type: null,
+          dimension: null,
+        },
+        {
+          family: "VECTOR",
+          text: "VECTOR(FLOAT, 256)",
+          precision: null,
+          scale: null,
+          length: null,
+          element_type: "FLOAT",
+          dimension: 256,
+        },
+      ],
     );
   });
 

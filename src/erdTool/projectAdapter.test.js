@@ -1494,10 +1494,19 @@ describe("diagramToCanonicalProject", () => {
     assert.match(ddl, /COL_GEOMETRY GEOMETRY/);
     assert.match(ddl, /COL_VECTOR VECTOR\(FLOAT, 256\)/);
 
-    assert.throws(
-      () => parseSnowflakeDDLToCanonicalProject(ddl),
-      /Ticket 2A-2|VECTOR/i,
+    const parsed = parseSnowflakeDDLToCanonicalProject(ddl);
+    const vector = parsed.physical_model.tables[0].columns.find(
+      (column) => column.name === "COL_VECTOR",
     );
+    assert.deepEqual(vector.data_type, {
+      family: "VECTOR",
+      text: "VECTOR(FLOAT, 256)",
+      precision: null,
+      scale: null,
+      length: null,
+      element_type: "FLOAT",
+      dimension: 256,
+    });
   });
 
   it("allows the same FK name on different source tables and rejects duplicates on one", () => {
@@ -2975,6 +2984,120 @@ describe("Snowflake type contract", () => {
     assert.throws(
       () => validateSnowflakeType({ ...canonical, extra: null }),
       /exactly the seven canonical fields/,
+    );
+  });
+
+  it("accepts the complete approved DDL alias matrix through the shared contract", () => {
+    const aliases = [
+      ["NUMBER", "NUMBER(38, 0)"],
+      ["DECIMAL(12, 2)", "NUMBER(12, 2)"],
+      ["DEC(12)", "NUMBER(12, 0)"],
+      ["NUMERIC(12, 2)", "NUMBER(12, 2)"],
+      ["INT", "NUMBER(38, 0)"],
+      ["INTEGER", "NUMBER(38, 0)"],
+      ["BIGINT", "NUMBER(38, 0)"],
+      ["SMALLINT", "NUMBER(38, 0)"],
+      ["TINYINT", "NUMBER(38, 0)"],
+      ["BYTEINT", "NUMBER(38, 0)"],
+      ["FLOAT", "FLOAT"],
+      ["FLOAT4", "FLOAT"],
+      ["FLOAT8", "FLOAT"],
+      ["DOUBLE", "FLOAT"],
+      ["DOUBLE PRECISION", "FLOAT"],
+      ["REAL", "FLOAT"],
+      ["BOOLEAN", "BOOLEAN"],
+      ["VARCHAR", "VARCHAR(16777216)"],
+      ["STRING", "VARCHAR(16777216)"],
+      ["TEXT", "VARCHAR(16777216)"],
+      ["VARCHAR2", "VARCHAR(16777216)"],
+      ["NVARCHAR", "VARCHAR(16777216)"],
+      ["NVARCHAR2", "VARCHAR(16777216)"],
+      ["CHAR VARYING(12)", "VARCHAR(12)"],
+      ["NCHAR VARYING", "VARCHAR(16777216)"],
+      ["CHAR", "VARCHAR(1)"],
+      ["CHARACTER", "VARCHAR(1)"],
+      ["NCHAR", "VARCHAR(1)"],
+      ["BINARY", "BINARY(8388608)"],
+      ["VARBINARY", "BINARY(8388608)"],
+      ["DATE", "DATE"],
+      ["TIME", "TIME(9)"],
+      ["TIMESTAMP_NTZ", "TIMESTAMP_NTZ(9)"],
+      ["TIMESTAMPNTZ(0)", "TIMESTAMP_NTZ(0)"],
+      ["TIMESTAMP WITHOUT TIME ZONE", "TIMESTAMP_NTZ(9)"],
+      ["DATETIME", "TIMESTAMP_NTZ(9)"],
+      ["TIMESTAMP_LTZ", "TIMESTAMP_LTZ(9)"],
+      ["TIMESTAMPLTZ", "TIMESTAMP_LTZ(9)"],
+      ["TIMESTAMP WITH LOCAL TIME ZONE", "TIMESTAMP_LTZ(9)"],
+      ["TIMESTAMP_TZ", "TIMESTAMP_TZ(9)"],
+      ["TIMESTAMPTZ(3)", "TIMESTAMP_TZ(3)"],
+      ["TIMESTAMP WITH TIME ZONE", "TIMESTAMP_TZ(9)"],
+      ["VARIANT", "VARIANT"],
+      ["OBJECT", "OBJECT"],
+      ["ARRAY", "ARRAY"],
+      ["GEOGRAPHY", "GEOGRAPHY"],
+      ["GEOMETRY", "GEOMETRY"],
+    ];
+    for (const [index, [source, expectedText]] of aliases.entries()) {
+      const sql = `CREATE TABLE ANALYTICS.CORE.ALIAS_${index} (VALUE ${source});`;
+      const project = parseSnowflakeDDLToCanonicalProject(sql);
+      const type = project.physical_model.tables[0].columns[0].data_type;
+      assert.equal(type.text, expectedText, source);
+      assert.deepEqual(Object.keys(type), [
+        "family",
+        "text",
+        "precision",
+        "scale",
+        "length",
+        "element_type",
+        "dimension",
+      ]);
+      assert.deepEqual(validateSnowflakeType(type), type);
+    }
+  });
+
+  it("maps generic TIMESTAMP only with explicit context and round-trips VECTOR", () => {
+    assert.throws(
+      () =>
+        parseSnowflakeDDLToCanonicalProject(
+          "CREATE TABLE ANALYTICS.CORE.EVENTS (OCCURRED_AT TIMESTAMP);",
+        ),
+      /explicit.*timestampTypeMapping/i,
+    );
+    for (const mapping of [
+      "TIMESTAMP_NTZ",
+      "TIMESTAMP_LTZ",
+      "TIMESTAMP_TZ",
+    ]) {
+      const source =
+        "CREATE TABLE ANALYTICS.CORE.EVENTS (OCCURRED_AT TIMESTAMP(3));";
+      const project = parseSnowflakeDDLToCanonicalProject(source, {
+        timestampTypeMapping: mapping,
+      });
+      assert.equal(
+        project.physical_model.tables[0].columns[0].data_type.text,
+        `${mapping}(3)`,
+      );
+    }
+
+    const source =
+      "CREATE TABLE ANALYTICS.CORE.EMBEDDINGS (ID INT, VECTOR_COL VECTOR(INT, 1));";
+    const project = parseSnowflakeDDLToCanonicalProject(source);
+    const rendered = renderCanonicalSnowflakeDDL(project);
+    const reparsed = parseSnowflakeDDLToCanonicalProject(rendered);
+    assert.deepEqual(
+      reparsed.physical_model.tables[0].columns.map((column) => column.data_type),
+      project.physical_model.tables[0].columns.map((column) => column.data_type),
+    );
+  });
+
+  it("rejects stale canonical type text at the renderer boundary", () => {
+    const project = parseSnowflakeDDLToCanonicalProject(
+      "CREATE TABLE ANALYTICS.CORE.EVENTS (EMBEDDING VECTOR(FLOAT, 256));",
+    );
+    project.physical_model.tables[0].columns[0].data_type.text = "VECTOR(INT, 1)";
+    assert.throws(
+      () => renderCanonicalSnowflakeDDL(project),
+      /text must equal its canonical value/i,
     );
   });
 });

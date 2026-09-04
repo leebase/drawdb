@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url";
 
 import { DB } from "../src/data/constants.js";
 import { importSQL } from "../src/utils/importSQL/index.js";
+import { fromSnowflake } from "../src/utils/importSQL/snowflake.js";
 
 const repositoryRoot = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -192,6 +193,19 @@ describe("SS-008 Snowflake DDL import integration", () => {
       assert.ok(Array.isArray(table.indices));
       assert.ok(Array.isArray(table.uniqueConstraints));
     }
+  });
+
+  it("forwards explicit generic TIMESTAMP mapping through the Snowflake import adapter", () => {
+    assert.throws(
+      () => fromSnowflake("CREATE TABLE ANALYTICS.CORE.EVENTS (AT TIMESTAMP);"),
+      /explicit.*timestampTypeMapping/i,
+    );
+    const diagram = fromSnowflake(
+      "CREATE TABLE ANALYTICS.CORE.EVENTS (AT TIMESTAMP(3));",
+      { timestampTypeMapping: "TIMESTAMP_LTZ" },
+    );
+    assert.equal(fieldByName(tableByName(diagram, "EVENTS"), "AT").type, "TIMESTAMP_LTZ");
+    assert.equal(fieldByName(tableByName(diagram, "EVENTS"), "AT").size, 3);
   });
 
   it("reports unsupported or malformed Snowflake DDL without crashing", () => {

@@ -40,7 +40,7 @@ function temporaryConfig() {
   return { directory, configPath, keyPath };
 }
 
-function fakeDriver({ connectionError } = {}) {
+function fakeDriver({ connectionError, vectorMetadata = false } = {}) {
   const observed = { connectionOptions: null, queries: [], destroyed: 0 };
   const rowsFor = (sqlText) => {
     if (sqlText.startsWith("SELECT CURRENT_ACCOUNT")) {
@@ -63,6 +63,27 @@ function fakeDriver({ connectionError } = {}) {
       return [
         { name: "ALBUM", database_name: "CHINOOK", schema_name: "PUBLIC", rows: 347 },
         { name: "ARTIST", database_name: "CHINOOK", schema_name: "PUBLIC", rows: 275 },
+      ];
+    }
+    if (sqlText.startsWith("DESCRIBE TABLE")) {
+      if (!vectorMetadata) throw new Error(`Unexpected test query: ${sqlText}`);
+      return [
+        {
+          NAME: "EMBEDDING",
+          TYPE: "VECTOR(FLOAT, 1536)",
+          KIND: "COLUMN",
+          NULL: "Y",
+          DEFAULT: null,
+          COMMENT: "Album embedding",
+        },
+        {
+          NAME: "TITLE_VECTOR",
+          TYPE: "VECTOR(INT, 3)",
+          KIND: "COLUMN",
+          NULL: "Y",
+          DEFAULT: null,
+          COMMENT: "Compact title embedding",
+        },
       ];
     }
     if (sqlText.startsWith("SHOW PRIMARY KEYS")) {
@@ -111,6 +132,16 @@ function fakeDriver({ connectionError } = {}) {
       ];
     }
     if (sqlText.includes(".COLUMNS")) {
+      if (vectorMetadata) {
+        return [
+          column("ALBUM", "ALBUM_ID", 1, "NUMBER", false),
+          column("ALBUM", "ARTIST_ID", 2, "NUMBER", false),
+          column("ALBUM", "EMBEDDING", 3, "VECTOR", true),
+          column("ALBUM", "TITLE_VECTOR", 4, "VECTOR", true),
+          column("ARTIST", "ARTIST_ID", 1, "NUMBER", false),
+          column("ARTIST", "NAME", 2, "TEXT", true),
+        ];
+      }
       return [
         column("ALBUM", "ALBUM_ID", 1, "NUMBER", false),
         column("ALBUM", "TITLE", 2, "TEXT", false),
@@ -325,7 +356,7 @@ describe("live Snowflake Electron-main service", () => {
     });
     assert.equal(metadata.tables.length, 2);
     assert.equal(metadata.columns.length, 5);
-    assert.equal(metadata.columns.find(({ column_name }) => column_name === "TITLE").data_type, "VARCHAR");
+    assert.equal(metadata.columns.find(({ column_name }) => column_name === "TITLE").data_type, "TEXT");
     assert.equal(metadata.referentialConstraints.length, 1);
     assert.doesNotMatch(JSON.stringify(metadata), /password|privateKey|session-2|token/i);
 
@@ -355,6 +386,64 @@ describe("live Snowflake Electron-main service", () => {
       driver.observed.queries.some(({ sqlText }) =>
         sqlText.startsWith("SHOW IMPORTED KEYS IN SCHEMA"),
       ),
+    );
+  });
+
+  it("DESCRIBEs only selected tables containing VECTOR columns and returns exact signatures", async () => {
+    const { directory, configPath } = temporaryConfig();
+    const driver = fakeDriver({ vectorMetadata: true });
+    const service = createSnowflakeService({
+      driver,
+      homeDirectory: directory,
+      configPaths: [configPath],
+      createId: () => "session-vector",
+    });
+    await service.connect({ mode: "profile", profileName: "erd-tool" });
+
+    const metadata = await service.reverseEngineer({
+      sessionId: "session-vector",
+      database: "CHINOOK",
+      schema: "PUBLIC",
+      tables: ["ALBUM", "ARTIST"],
+    });
+    const describeQueries = driver.observed.queries.filter(({ sqlText }) =>
+      sqlText.startsWith("DESCRIBE TABLE"),
+    );
+    assert.equal(describeQueries.length, 1);
+    assert.equal(describeQueries[0].sqlText, 'DESCRIBE TABLE "CHINOOK"."PUBLIC"."ALBUM"');
+    assert.deepEqual(
+      metadata.describeRows.map(({ table_catalog, table_schema, table_name, name, type }) =>
+        ({ table_catalog, table_schema, table_name, name, type })),
+      [
+        {
+          table_catalog: "CHINOOK",
+          table_schema: "PUBLIC",
+          table_name: "ALBUM",
+          name: "EMBEDDING",
+          type: "VECTOR(FLOAT, 1536)",
+        },
+        {
+          table_catalog: "CHINOOK",
+          table_schema: "PUBLIC",
+          table_name: "ALBUM",
+          name: "TITLE_VECTOR",
+          type: "VECTOR(INT, 3)",
+        },
+      ],
+    );
+
+    const diagram = snowflakeMetadataToDiagram(metadata, {
+      title: "CHINOOK.PUBLIC",
+    });
+    const album = diagram.tables.find(({ name }) => name === "ALBUM");
+    assert.deepEqual(
+      album.fields
+        .filter(({ type }) => type === "VECTOR")
+        .map(({ name, type, size }) => ({ name, type, size })),
+      [
+        { name: "EMBEDDING", type: "VECTOR", size: "FLOAT,1536" },
+        { name: "TITLE_VECTOR", type: "VECTOR", size: "INT,3" },
+      ],
     );
   });
 
@@ -438,4 +527,3 @@ describe("live Snowflake Electron-main service", () => {
     );
   });
 });
-

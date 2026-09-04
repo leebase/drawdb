@@ -1,7 +1,10 @@
 import {
+  SNOWFLAKE_TYPE_ALIASES,
+  assertSnowflakeTypeExportable,
   canonicalizeSnowflakeType,
   canonicalizeSnowflakeTypeFromField,
   fieldSizeFromSnowflakeType,
+  snowflakeTypeText,
   validateSnowflakeType,
 } from "./snowflakeTypeContract.js";
 
@@ -760,7 +763,11 @@ export function toSnowflakeIdentifier(value, label = "identifier") {
 function validateDataType(
   dataType,
   label,
-  { legacy = false, allowIncompleteVector = false } = {},
+  {
+    legacy = false,
+    allowIncompleteVector = false,
+    timestampTypeMapping,
+  } = {},
 ) {
   requireObject(dataType, label);
   if (legacy) {
@@ -775,11 +782,13 @@ function validateDataType(
     }
     return canonicalizeSnowflakeType(dataType, {
       allowIncompleteVector,
+      timestampTypeMapping,
       label: `${label} legacy`,
     });
   }
   return validateSnowflakeType(dataType, {
     allowIncompleteVector,
+    timestampTypeMapping,
     label,
   });
 }
@@ -1043,7 +1052,10 @@ function reconcileCanonicalTypesIntoDrawdbDocument(document, model) {
   };
 }
 
-function validatePhysicalModel(model, { allowIncompleteVector = false } = {}) {
+function validatePhysicalModel(
+  model,
+  { allowIncompleteVector = false, timestampTypeMapping } = {},
+) {
   requireObject(model, "physical_model");
   requireExactKeys(model, PHYSICAL_MODEL_KEYS, "physical model");
   assertNoForbiddenKeys(model, "physical_model");
@@ -1100,6 +1112,7 @@ function validatePhysicalModel(model, { allowIncompleteVector = false } = {}) {
           data_type: validateDataType(column.data_type, "data_type", {
             legacy: modelVersion === LEGACY_MODEL_VERSION,
             allowIncompleteVector,
+            timestampTypeMapping,
           }),
           nullable: requireBoolean(column.nullable, "nullable"),
           default: requireOptionalString(column.default, "default"),
@@ -1383,7 +1396,7 @@ function validatePhysicalModel(model, { allowIncompleteVector = false } = {}) {
   };
 }
 
-export function canonicalProjectToDiagram(project) {
+export function canonicalProjectToDiagram(project, options = {}) {
   requireObject(project, "project");
   const unexpected = Object.keys(project).filter(
     (key) => !TOP_LEVEL_ALLOWED.has(key),
@@ -1410,6 +1423,7 @@ export function canonicalProjectToDiagram(project) {
 
   const model = validatePhysicalModel(project.physical_model, {
     allowIncompleteVector: true,
+    timestampTypeMapping: options.timestampTypeMapping,
   });
   const tableIds = new Set(model.tables.map((t) => t.id));
   const layout = parseDiagramLayout(project.diagram_layout, tableIds);
@@ -2098,7 +2112,8 @@ function namespaceForTable(model, table) {
 }
 
 function renderColumn(column) {
-  const parts = [column.name, column.data_type.text];
+  const dataType = assertSnowflakeTypeExportable(column.data_type);
+  const parts = [column.name, snowflakeTypeText(dataType)];
   if (!column.nullable) {
     parts.push("NOT NULL");
   }
@@ -2282,50 +2297,91 @@ function parseSnowflakeColumnList(value, label) {
   return columns;
 }
 
-function parseSnowflakeDataType(value) {
-  const match = String(value)
-    .trim()
-    .match(/^([A-Z_][A-Z0-9_$]*)(?:\s*\(([^()]*)\))?$/i);
-  if (!match) fail(`unsupported Snowflake data type ${value}`);
-  const family = match[1].toUpperCase();
-  const args =
-    match[2] === undefined
-      ? []
-      : match[2].split(",").map((arg) => arg.trim());
+function escapeSnowflakeRegex(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
-  // Ticket 2A-1 changes the canonical representation, not the DDL grammar.
-  // Retain the existing parser surface until the dedicated 2A-2 boundary work.
-  if (family === "NUMBER") {
-    if (args.length !== 2) fail("NUMBER requires precision and scale");
-  } else if (family === "VARCHAR") {
-    if (args.length > 1) fail("VARCHAR accepts at most 1 argument");
-  } else if (family === "BINARY") {
-    if (args.length !== 1) fail("BINARY requires length");
-  } else if (
-    family === "TIMESTAMP_NTZ" ||
-    family === "TIMESTAMP_LTZ" ||
-    family === "TIMESTAMP_TZ" ||
-    family === "TIME"
-  ) {
-    if (args.length > 1) fail(`${family} accepts at most 1 argument`);
-  } else if (
-    family === "DATE" ||
-    family === "BOOLEAN" ||
-    family === "FLOAT" ||
-    family === "VARIANT" ||
-    family === "OBJECT" ||
-    family === "ARRAY" ||
-    family === "GEOGRAPHY" ||
-    family === "GEOMETRY"
-  ) {
-    if (args.length !== 0) fail(`${family} does not support parameters`);
-  } else if (family === "VECTOR") {
-    fail("VECTOR DDL parsing is deferred to Ticket 2A-2");
-  } else {
-    fail(`unsupported type family ${family}`);
+const SNOWFLAKE_TYPE_ALIAS_PATTERNS = Object.keys(SNOWFLAKE_TYPE_ALIASES)
+  .sort((left, right) => right.length - left.length)
+  .map((alias) => ({
+    alias,
+    pattern: new RegExp(
+      `^${alias
+        .split(" ")
+        .map((part) => escapeSnowflakeRegex(part))
+        .join("\\s+")}(?=$|\\s|\\()`,
+      "i",
+    ),
+  }));
+
+function consumeSnowflakeTypeParameters(value, start, label) {
+  let index = start;
+  while (/\s/.test(value[index] ?? "")) index += 1;
+  if (value[index] !== "(") return index;
+
+  let depth = 0;
+  let inString = false;
+  for (; index < value.length; index += 1) {
+    const char = value[index];
+    if (inString) {
+      if (char === "'" && value[index + 1] === "'") {
+        index += 1;
+      } else if (char === "'") {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === "'") {
+      inString = true;
+    } else if (char === "(") {
+      depth += 1;
+    } else if (char === ")") {
+      depth -= 1;
+      if (depth === 0) return index + 1;
+      if (depth < 0) break;
+    }
+  }
+  fail(`unsupported Snowflake data type ${label}: unbalanced parameters`);
+}
+
+function splitSnowflakeColumnTypeAndRest(value) {
+  const source = String(value).trim();
+  for (const { pattern } of SNOWFLAKE_TYPE_ALIAS_PATTERNS) {
+    const match = source.match(pattern);
+    if (!match) continue;
+    const expressionEnd = consumeSnowflakeTypeParameters(
+      source,
+      match[0].length,
+      source,
+    );
+    return {
+      rawType: source.slice(0, expressionEnd).trim(),
+      rawRest: source.slice(expressionEnd).trim(),
+    };
   }
 
+  // Let the shared contract report the unsupported family while still
+  // separating its optional parameter list from column clauses.
+  const token = source.match(/^[A-Z_][A-Z0-9_$]*/i);
+  if (!token) fail(`unsupported Snowflake data type ${source}`);
+  const expressionEnd = consumeSnowflakeTypeParameters(
+    source,
+    token[0].length,
+    source,
+  );
+  return {
+    rawType: source.slice(0, expressionEnd).trim(),
+    rawRest: source.slice(expressionEnd).trim(),
+  };
+}
+
+function parseSnowflakeDataType(value, options = {}) {
+  const contractOptions = {};
+  if (Object.prototype.hasOwnProperty.call(options, "timestampTypeMapping")) {
+    contractOptions.timestampTypeMapping = options.timestampTypeMapping;
+  }
   return canonicalizeSnowflakeType(value, {
+    ...contractOptions,
     label: `data type ${String(value).trim()}`,
   });
 }
@@ -2472,15 +2528,21 @@ function parseSnowflakeColumnClauses(rest, columnName) {
   return { nullable, defaultValue, comment };
 }
 
-function parseSnowflakeColumnDefinition(definition, tableParts, ordinal) {
-  const match = definition.match(
-    /^([A-Z_][A-Z0-9_$]*)\s+([A-Z_][A-Z0-9_$]*(?:\s*\([^)]*\))?)([\s\S]*)$/i,
-  );
+function parseSnowflakeColumnDefinition(
+  definition,
+  tableParts,
+  ordinal,
+  options = {},
+) {
+  const match = definition.match(/^([A-Z_][A-Z0-9_$]*)\s+([\s\S]*)$/i);
   if (!match) {
     fail(`unsupported Snowflake column definition ${JSON.stringify(definition)}`);
   }
-  const [, rawName, rawType, rawRest] = match;
+  const [, rawName, rawTypeAndRest] = match;
   const name = parseSnowflakeIdentifier(rawName, "column");
+  const { rawType, rawRest } = splitSnowflakeColumnTypeAndRest(
+    rawTypeAndRest,
+  );
   if (unsupportedSnowflakeColumnFeature(rawRest)) {
     fail(`unsupported Snowflake column feature on ${name}`);
   }
@@ -2494,7 +2556,7 @@ function parseSnowflakeColumnDefinition(definition, tableParts, ordinal) {
     id: columnId(catalog, schema, tableName, name),
     name,
     ordinal,
-    data_type: parseSnowflakeDataType(rawType),
+    data_type: parseSnowflakeDataType(rawType, options),
     nullable,
     default: defaultValue,
     comment,
@@ -2527,7 +2589,7 @@ function parseSnowflakeInlineConstraint(definition, tableParts, columnsByName) {
   };
 }
 
-function parseSnowflakeCreateTable(statement) {
+function parseSnowflakeCreateTable(statement, options = {}) {
   const match = statement.match(
     /^CREATE\s+TABLE\s+([A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*)\s*\(([\s\S]*)\)\s*(?:COMMENT\s*=\s*('(?:[^']|'')*'))?$/i,
   );
@@ -2553,6 +2615,7 @@ function parseSnowflakeCreateTable(statement) {
       definition,
       tableParts,
       columns.length + 1,
+      options,
     );
     if (columnsByName.has(column.name)) {
       fail(`duplicate column ${column.name} in ${name}`);
@@ -2654,7 +2717,7 @@ export function parseSnowflakeDDLToCanonicalProject(sql, options = {}) {
         schema,
       });
     } else if (/^CREATE\s+TABLE\s+/i.test(statement)) {
-      const { namespace, table } = parseSnowflakeCreateTable(statement);
+      const { namespace, table } = parseSnowflakeCreateTable(statement, options);
       namespaceById.set(namespace.id, namespace);
       if (tableByName.has(`${namespace.catalog}.${namespace.schema}.${table.name}`)) {
         fail(`duplicate table ${namespace.catalog}.${namespace.schema}.${table.name}`);

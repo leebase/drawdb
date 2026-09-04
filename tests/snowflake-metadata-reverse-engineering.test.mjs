@@ -293,6 +293,102 @@ function column(catalog, schema, table, name, ordinal, dataType, overrides = {})
   };
 }
 
+function mockedVectorMetadata() {
+  const vectorColumn = (table, name, ordinal) =>
+    column("ANALYTICS", "CORE", table, name, ordinal, "VECTOR", {
+      is_nullable: "YES",
+    });
+  return {
+    schemata: [{ catalog_name: "ANALYTICS", schema_name: "CORE" }],
+    tables: [
+      {
+        table_catalog: "ANALYTICS",
+        table_schema: "CORE",
+        table_name: "EMBEDDINGS",
+        table_type: "BASE TABLE",
+      },
+      {
+        table_catalog: "ANALYTICS",
+        table_schema: "CORE",
+        table_name: "SEARCH_INDEX",
+        table_type: "BASE TABLE",
+      },
+    ],
+    columns: [
+      vectorColumn("EMBEDDINGS", "DOCUMENT_VECTOR", 1),
+      vectorColumn("EMBEDDINGS", "TITLE_VECTOR", 2),
+      vectorColumn("SEARCH_INDEX", "QUERY_VECTOR", 1),
+      column("ANALYTICS", "CORE", "SEARCH_INDEX", "LABEL", 2, "TEXT", {
+        character_maximum_length: 128,
+      }),
+      column("ANALYTICS", "CORE", "SEARCH_INDEX", "SCORE", 3, "REAL"),
+      column("ANALYTICS", "CORE", "SEARCH_INDEX", "RANK", 4, "FIXED", {
+        numeric_precision: 10,
+        numeric_scale: 0,
+      }),
+    ],
+    describeRows: [
+      {
+        table_catalog: "ANALYTICS",
+        table_schema: "CORE",
+        table_name: "EMBEDDINGS",
+        name: "DOCUMENT_VECTOR",
+        type: "VECTOR(FLOAT, 1536)",
+        kind: "COLUMN",
+        comment: null,
+      },
+      {
+        table_catalog: "ANALYTICS",
+        table_schema: "CORE",
+        table_name: "EMBEDDINGS",
+        name: "TITLE_VECTOR",
+        type: "VECTOR(INT, 3)",
+        kind: "COLUMN",
+        comment: null,
+      },
+      {
+        table_catalog: "ANALYTICS",
+        table_schema: "CORE",
+        table_name: "SEARCH_INDEX",
+        name: "QUERY_VECTOR",
+        type: "VECTOR(FLOAT, 4096)",
+        kind: "COLUMN",
+        comment: null,
+      },
+      {
+        table_catalog: "ANALYTICS",
+        table_schema: "CORE",
+        table_name: "SEARCH_INDEX",
+        name: "LABEL",
+        type: "VARCHAR(128)",
+        kind: "COLUMN",
+        comment: null,
+      },
+      {
+        table_catalog: "ANALYTICS",
+        table_schema: "CORE",
+        table_name: "SEARCH_INDEX",
+        name: "SCORE",
+        type: "FLOAT",
+        kind: "COLUMN",
+        comment: null,
+      },
+      {
+        table_catalog: "ANALYTICS",
+        table_schema: "CORE",
+        table_name: "SEARCH_INDEX",
+        name: "RANK",
+        type: "NUMBER(10, 0)",
+        kind: "COLUMN",
+        comment: null,
+      },
+    ],
+    tableConstraints: [],
+    keyColumnUsage: [],
+    referentialConstraints: [],
+  };
+}
+
 function constraint(catalog, schema, table, name, type) {
   return {
     table_catalog: catalog,
@@ -319,7 +415,15 @@ function keyUsage(catalog, schema, table, constraintName, columnName, ordinal) {
 }
 
 function type(family, text, precision = null, scale = null, length = null) {
-  return { family, text, precision, scale, length };
+  return {
+    family,
+    text,
+    precision,
+    scale,
+    length,
+    element_type: null,
+    dimension: null,
+  };
 }
 
 function expectedCanonicalProject() {
@@ -386,9 +490,9 @@ function expectedCanonicalProject() {
   ];
 
   return {
-    project_version: "1",
+    project_version: "2",
     physical_model: {
-      model_version: "1",
+      model_version: "2",
       name: "mocked-snowflake-metadata",
       namespaces,
       tables,
@@ -691,5 +795,182 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
     ]);
     assertNoSecretMaterial(project);
     assertNoSecretMaterial(diagram);
+  });
+
+  it("merges exact VECTOR signatures for multiple columns across multiple tables", async () => {
+    const { snowflakeMetadataToCanonicalProject, snowflakeMetadataToDiagram } =
+      await loadSnowflakeMetadataMapper();
+    const metadata = mockedVectorMetadata();
+    const project = snowflakeMetadataToCanonicalProject(metadata, {
+      name: "vector-metadata",
+    });
+
+    assert.deepEqual(
+      project.physical_model.tables.map((table) => ({
+        name: table.name,
+        types: table.columns.map((column) => column.data_type),
+      })),
+      [
+        {
+          name: "ANALYTICS.CORE.EMBEDDINGS".split(".").at(-1),
+          types: [
+            {
+              family: "VECTOR",
+              text: "VECTOR(FLOAT, 1536)",
+              precision: null,
+              scale: null,
+              length: null,
+              element_type: "FLOAT",
+              dimension: 1536,
+            },
+            {
+              family: "VECTOR",
+              text: "VECTOR(INT, 3)",
+              precision: null,
+              scale: null,
+              length: null,
+              element_type: "INT",
+              dimension: 3,
+            },
+          ],
+        },
+        {
+          name: "SEARCH_INDEX",
+          types: [
+            {
+              family: "VECTOR",
+              text: "VECTOR(FLOAT, 4096)",
+              precision: null,
+              scale: null,
+              length: null,
+              element_type: "FLOAT",
+              dimension: 4096,
+            },
+            {
+              family: "VARCHAR",
+              text: "VARCHAR(128)",
+              precision: null,
+              scale: null,
+              length: 128,
+              element_type: null,
+              dimension: null,
+            },
+            {
+              family: "FLOAT",
+              text: "FLOAT",
+              precision: null,
+              scale: null,
+              length: null,
+              element_type: null,
+              dimension: null,
+            },
+            {
+              family: "NUMBER",
+              text: "NUMBER(10, 0)",
+              precision: 10,
+              scale: 0,
+              length: null,
+              element_type: null,
+              dimension: null,
+            },
+          ],
+        },
+      ],
+    );
+
+    const diagram = snowflakeMetadataToDiagram(metadata, {
+      title: "vector-metadata",
+    });
+    assert.deepEqual(
+      diagram.tables.map((table) =>
+        table.fields
+          .filter((field) => field.type === "VECTOR")
+          .map(({ name, type, size }) => ({ name, type, size })),
+      ),
+      [
+        [
+          { name: "DOCUMENT_VECTOR", type: "VECTOR", size: "FLOAT,1536" },
+          { name: "TITLE_VECTOR", type: "VECTOR", size: "INT,3" },
+        ],
+        [{ name: "QUERY_VECTOR", type: "VECTOR", size: "FLOAT,4096" }],
+      ],
+    );
+  });
+
+  it("fails closed for missing, duplicate, malformed, and contradictory VECTOR DESCRIBE rows", async () => {
+    const { snowflakeMetadataToCanonicalProject } =
+      await loadSnowflakeMetadataMapper();
+    const cases = [
+      ["missing", (metadata) => { metadata.describeRows = metadata.describeRows.filter((row) => row.name !== "TITLE_VECTOR"); }, /missing.*DESCRIBE/i],
+      ["duplicate", (metadata) => { metadata.describeRows.push({ ...metadata.describeRows[0] }); }, /duplicate.*DESCRIBE/i],
+      ["malformed", (metadata) => { metadata.describeRows[0].type = "VECTOR(INT)"; }, /malformed|element.*dimension/i],
+      ["contradictory", (metadata) => { metadata.describeRows[0].type = "VARCHAR(20)"; }, /contradictory.*DESCRIBE|expected.*VECTOR/i],
+    ];
+    for (const [label, mutate, expected] of cases) {
+      const metadata = structuredClone(mockedVectorMetadata());
+      mutate(metadata);
+      assert.throws(
+        () => snowflakeMetadataToCanonicalProject(metadata, { name: label }),
+        expected,
+        label,
+      );
+    }
+  });
+
+  it("rejects generic TIMESTAMP metadata without an explicit mapping", async () => {
+    const { snowflakeMetadataToCanonicalProject } =
+      await loadSnowflakeMetadataMapper();
+    const metadata = mockedVectorMetadata();
+    metadata.columns[3].data_type = "TIMESTAMP";
+    metadata.columns[3].character_maximum_length = null;
+    metadata.columns[3].numeric_precision = null;
+    metadata.columns[3].numeric_scale = null;
+    metadata.columns[3].datetime_precision = 9;
+    assert.throws(
+      () => snowflakeMetadataToCanonicalProject(metadata, { name: "timestamp" }),
+      /generic TIMESTAMP.*explicit timestampTypeMapping/i,
+    );
+  });
+
+  it("preserves alias-specific defaults at the metadata boundary", async () => {
+    const { snowflakeMetadataToCanonicalProject } =
+      await loadSnowflakeMetadataMapper();
+    const metadata = mockedVectorMetadata();
+    metadata.columns[3].data_type = "CHAR";
+    metadata.columns[3].character_maximum_length = null;
+
+    const project = snowflakeMetadataToCanonicalProject(metadata, {
+      name: "char-default",
+    });
+    const label = project.physical_model.tables
+      .find(({ name }) => name === "SEARCH_INDEX")
+      .columns.find(({ name }) => name === "LABEL");
+    assert.deepEqual(
+      label.data_type,
+      type("VARCHAR", "VARCHAR(1)", null, null, 1),
+    );
+  });
+
+  it("rejects contradictory parameters beside parameterized metadata types", async () => {
+    const { snowflakeMetadataToCanonicalProject } =
+      await loadSnowflakeMetadataMapper();
+    const cases = [
+      ["NUMBER(12, 2)", { numeric_precision: 38 }, /contradictory NUMBER/i],
+      ["VARCHAR(12)", { character_maximum_length: 20 }, /contradictory VARCHAR/i],
+      ["VECTOR(INT, 3)", { numeric_precision: 4 }, /contradictory VECTOR/i],
+    ];
+    for (const [dataType, overrides, expected] of cases) {
+      const metadata = mockedVectorMetadata();
+      Object.assign(metadata.columns[3], {
+        data_type: dataType,
+        character_maximum_length: null,
+        ...overrides,
+      });
+      assert.throws(
+        () => snowflakeMetadataToCanonicalProject(metadata),
+        expected,
+        dataType,
+      );
+    }
   });
 });

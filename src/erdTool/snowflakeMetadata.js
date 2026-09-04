@@ -1,7 +1,8 @@
 import { canonicalProjectToDiagram } from "./projectAdapter.js";
+import { canonicalizeSnowflakeType } from "./snowflakeTypeContract.js";
 
-const PROJECT_VERSION = "1";
-const MODEL_VERSION = "1";
+const PROJECT_VERSION = "2";
+const MODEL_VERSION = "2";
 const FALLBACK_X_STEP = 280;
 const FALLBACK_Y = 80;
 const IDENTIFIER_RE = /^[A-Z_][A-Z0-9_$]*$/;
@@ -39,10 +40,22 @@ function optionalString(value) {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
+function metadataValue(row, ...names) {
+  if (!row || typeof row !== "object" || Array.isArray(row)) return undefined;
+  const wanted = new Set(names.map((name) => String(name).toLowerCase()));
+  const key = Object.keys(row).find((candidate) =>
+    wanted.has(candidate.toLowerCase()),
+  );
+  return key === undefined ? undefined : row[key];
+}
+
 function integerOrNull(value, label) {
-  if (value === null || value === undefined) return null;
-  if (!Number.isInteger(value)) fail(`${label} must be an integer`);
-  return value;
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^[+-]?\d+$/.test(value.trim())) {
+    return Number(value.trim());
+  }
+  fail(`${label} must be an integer`);
 }
 
 function positiveIntegerOrNull(value, label) {
@@ -93,88 +106,385 @@ function namespaceParts(namespaceObjectId) {
   return { catalog: match[1], schema: match[2] };
 }
 
-function canonicalDataType(column) {
-  const family = identifier(column.data_type, "column.data_type");
-  const precision = integerOrNull(
-    column.numeric_precision,
-    "column.numeric_precision",
-  );
-  const scale = integerOrNull(column.numeric_scale, "column.numeric_scale");
-  const length = integerOrNull(
-    column.character_maximum_length,
-    "column.character_maximum_length",
-  );
-  const datetimePrecision = integerOrNull(
-    column.datetime_precision,
-    "column.datetime_precision",
-  );
+function typeLabel(column) {
+  return `column ${column.table_catalog ?? "?"}.${column.table_schema ?? "?"}.${column.table_name ?? "?"}.${column.column_name ?? "?"}`;
+}
 
-  if (family === "NUMBER") {
-    const resolvedPrecision = precision ?? 38;
-    const resolvedScale = scale ?? 0;
-    return {
-      family,
-      text: `NUMBER(${resolvedPrecision}, ${resolvedScale})`,
-      precision: resolvedPrecision,
-      scale: resolvedScale,
-      length: null,
-    };
+/**
+ * FIXED is emitted by some Snowflake driver/SHOW metadata paths.  It is
+ * intentionally handled here, at the metadata boundary only; it is not a
+ * user-facing alias in the shared DDL contract.
+ */
+function metadataTypeToken(value, label) {
+  if (typeof value !== "string" || !value.trim()) {
+    fail(`${label} must be a nonblank Snowflake data type`);
   }
-  if (family === "VARCHAR") {
-    const resolvedLength = length ?? 16777216;
-    return {
-      family,
-      text: `VARCHAR(${resolvedLength})`,
-      precision: null,
-      scale: null,
-      length: resolvedLength,
-    };
-  }
-  if (family === "BINARY") {
-    const resolvedLength = length ?? 8388608;
-    return {
-      family,
-      text: `BINARY(${resolvedLength})`,
-      precision: null,
-      scale: null,
-      length: resolvedLength,
-    };
-  }
-  if (
+  const token = value.trim();
+  return token.toUpperCase() === "FIXED" ? "NUMBER" : token;
+}
+
+function metadataParameters(column, label) {
+  return {
+    numericPrecision: integerOrNull(
+      column.numeric_precision,
+      `${label}.numeric_precision`,
+    ),
+    numericScale: integerOrNull(
+      column.numeric_scale,
+      `${label}.numeric_scale`,
+    ),
+    characterLength: integerOrNull(
+      column.character_maximum_length,
+      `${label}.character_maximum_length`,
+    ),
+    datetimePrecision: integerOrNull(
+      column.datetime_precision,
+      `${label}.datetime_precision`,
+    ),
+  };
+}
+
+function assertMetadataParameters(canonical, parameters, label) {
+  const { family } = canonical;
+  const {
+    numericPrecision,
+    numericScale,
+    characterLength,
+    datetimePrecision,
+  } = parameters;
+
+  const usesNumber = family === "NUMBER";
+  const usesLength = family === "VARCHAR" || family === "BINARY";
+  const usesPrecision =
+    family === "TIME" ||
     family === "TIMESTAMP_NTZ" ||
     family === "TIMESTAMP_LTZ" ||
-    family === "TIMESTAMP_TZ" ||
-    family === "TIME"
+    family === "TIMESTAMP_TZ";
+
+  if (usesNumber) {
+    if (characterLength !== null || datetimePrecision !== null) {
+      fail(`${label} has contradictory NUMBER metadata parameters`);
+    }
+  } else if (usesLength) {
+    if (numericPrecision !== null || numericScale !== null || datetimePrecision !== null) {
+      fail(`${label} has contradictory ${family} metadata parameters`);
+    }
+  } else if (usesPrecision) {
+    if (numericScale !== null || characterLength !== null) {
+      fail(`${label} has contradictory ${family} metadata parameters`);
+    }
+    if (
+      numericPrecision !== null &&
+      datetimePrecision !== null &&
+      numericPrecision !== datetimePrecision
+    ) {
+      fail(`${label} has contradictory ${family} precision metadata`);
+    }
+  } else if (
+    numericPrecision !== null ||
+    numericScale !== null ||
+    characterLength !== null ||
+    datetimePrecision !== null
   ) {
-    const resolvedPrecision = datetimePrecision ?? precision ?? 9;
+    fail(`${label} has contradictory ${family} metadata parameters`);
+  }
+
+  if (usesNumber) {
+    if (numericPrecision === null && numericScale !== null) {
+      fail(`${label} has numeric_scale without numeric_precision`);
+    }
+    if (
+      (numericPrecision !== null && numericPrecision !== canonical.precision) ||
+      (numericScale !== null && numericScale !== canonical.scale)
+    ) {
+      fail(`${label} has contradictory NUMBER metadata parameters`);
+    }
+  } else if (
+    usesLength &&
+    characterLength !== null &&
+    characterLength !== canonical.length
+  ) {
+    fail(`${label} has contradictory ${family} metadata parameters`);
+  } else if (usesPrecision) {
+    const precision = datetimePrecision ?? numericPrecision;
+    if (precision !== null && precision !== canonical.precision) {
+      fail(`${label} has contradictory ${family} precision metadata`);
+    }
+  }
+}
+
+function typeWithMetadataParameters(column, token, options, label) {
+  const probe = canonicalizeSnowflakeType(token, {
+    ...options,
+    allowIncompleteVector: true,
+    label,
+  });
+  const family = probe.family;
+  const usesNumber = family === "NUMBER";
+  const usesLength = family === "VARCHAR" || family === "BINARY";
+  const usesPrecision =
+    family === "TIME" ||
+    family === "TIMESTAMP_NTZ" ||
+    family === "TIMESTAMP_LTZ" ||
+    family === "TIMESTAMP_TZ";
+  const parameters = metadataParameters(column, label);
+  const {
+    numericPrecision,
+    numericScale,
+    characterLength,
+    datetimePrecision,
+  } = parameters;
+
+  let expression = token;
+  if (usesNumber) {
+    if (numericPrecision !== null) {
+      expression =
+        numericScale === null
+          ? `${token}(${numericPrecision})`
+          : `${token}(${numericPrecision}, ${numericScale})`;
+    }
+  } else if (usesLength && characterLength !== null) {
+    expression = `${token}(${characterLength})`;
+  } else if (usesPrecision) {
+    const precision = datetimePrecision ?? numericPrecision;
+    if (precision !== null) expression = `${token}(${precision})`;
+  }
+
+  const canonical = canonicalizeSnowflakeType(expression, {
+    ...options,
+    allowIncompleteVector: true,
+    label,
+  });
+  assertMetadataParameters(canonical, parameters, label);
+  return canonical;
+}
+
+function describeTypeRows(metadata) {
+  const keys = [
+    "describeRows",
+    "vectorDescribeRows",
+    "describeTableRows",
+    "describeTables",
+  ].filter((key) => Object.prototype.hasOwnProperty.call(metadata, key));
+  if (keys.length > 1) {
+    fail(`metadata contains conflicting DESCRIBE TABLE collections: ${keys.join(", ")}`);
+  }
+  return keys.length === 0 ? undefined : metadata[keys[0]];
+}
+
+function describeTableIdentity(value, label, fallbackKey = null) {
+  const catalog = metadataValue(value, "table_catalog", "catalog_name", "catalog");
+  const schema = metadataValue(value, "table_schema", "schema_name", "schema");
+  const table = metadataValue(value, "table_name", "table");
+  if (catalog !== undefined && schema !== undefined && table !== undefined) {
     return {
-      family,
-      text: `${family}(${resolvedPrecision})`,
-      precision: resolvedPrecision,
-      scale: null,
-      length: null,
+      catalog: identifier(catalog, `${label}.table_catalog`),
+      schema: identifier(schema, `${label}.table_schema`),
+      table: identifier(table, `${label}.table_name`),
     };
+  }
+  if (fallbackKey !== null) {
+    const key = String(fallbackKey);
+    const parts = key.includes("\0") ? key.split("\0") : key.split(".");
+    if (parts.length === 3) {
+      return {
+        catalog: identifier(parts[0], `${label}.table_catalog`),
+        schema: identifier(parts[1], `${label}.table_schema`),
+        table: identifier(parts[2], `${label}.table_name`),
+      };
+    }
+  }
+  fail(`${label} is missing DESCRIBE TABLE catalog, schema, and table identity`);
+}
+
+function addDescribeTableRows(index, identity, value, label) {
+  if (!Array.isArray(value)) fail(`${label} must be an array`);
+  const key = objectKey(identity.catalog, identity.schema, identity.table);
+  if (!index.has(key)) index.set(key, new Map());
+  const byColumn = index.get(key);
+  for (const [rowIndex, row] of value.entries()) {
+    if (!row || typeof row !== "object" || Array.isArray(row)) {
+      fail(`${label}[${rowIndex}] must be an object`);
+    }
+    const name = metadataValue(row, "name", "column_name", "column");
+    const type = metadataValue(row, "type", "data_type", "datatype");
+    if (typeof name !== "string" || !name.trim()) {
+      fail(`${label}[${rowIndex}] is missing a column name`);
+    }
+    if (typeof type !== "string" || !type.trim()) {
+      fail(`${label}[${rowIndex}] is missing a column type`);
+    }
+    const columnName = identifier(name.trim(), `${label}[${rowIndex}].name`);
+    if (byColumn.has(columnName)) {
+      fail(`duplicate DESCRIBE TABLE row for ${identity.catalog}.${identity.schema}.${identity.table}.${columnName}`);
+    }
+    byColumn.set(columnName, { name: columnName, type: type.trim() });
+  }
+}
+
+function buildDescribeTypeIndex(metadata, expectedVectorColumns) {
+  const source = describeTypeRows(metadata);
+  const index = new Map();
+  if (source === undefined) return index;
+
+  const addEntry = (entry, label, fallbackKey = null) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      fail(`${label} must be an object`);
+    }
+    const nestedRows = metadataValue(entry, "rows", "columns", "describe_rows");
+    if (Array.isArray(nestedRows)) {
+      const identity = describeTableIdentity(entry, label, fallbackKey);
+      addDescribeTableRows(index, identity, nestedRows, `${label}.rows`);
+      return;
+    }
+    const identity = describeTableIdentity(entry, label, fallbackKey);
+    addDescribeTableRows(index, identity, [entry], label);
+  };
+
+  if (Array.isArray(source)) {
+    for (const [indexValue, entry] of source.entries()) {
+      addEntry(entry, `metadata.describeRows[${indexValue}]`);
+    }
+  } else if (source && typeof source === "object") {
+    for (const [key, value] of Object.entries(source)) {
+      if (Array.isArray(value)) {
+        const identity = describeTableIdentity(value[0] ?? {}, `metadata.describeRows.${key}`, key);
+        addDescribeTableRows(index, identity, value, `metadata.describeRows.${key}`);
+      } else {
+        addEntry(value, `metadata.describeRows.${key}`, key);
+      }
+    }
+  } else {
+    fail("metadata DESCRIBE TABLE collection must be an array or object");
+  }
+
+  // A DESCRIBE row that claims to be VECTOR must correspond to a VECTOR in
+  // COLUMNS.  This catches stale or contradictory driver responses before the
+  // row can become canonical data.
+  for (const [tableKey, byColumn] of index) {
+    const expected = expectedVectorColumns.get(tableKey) ?? new Map();
+    for (const [columnName, row] of byColumn) {
+      if (!/^VECTOR(?:\s*\(|\s*$)/i.test(row.type)) continue;
+      let described;
+      try {
+        described = canonicalizeSnowflakeType(row.type, {
+          allowIncompleteVector: true,
+          label: `DESCRIBE TABLE ${tableKey}.${columnName}`,
+        });
+      } catch (error) {
+        fail(`malformed DESCRIBE TABLE VECTOR row for ${tableKey}.${columnName}: ${error.message}`);
+      }
+      if (!expected.has(columnName)) {
+        fail(`contradictory DESCRIBE TABLE VECTOR row for ${tableKey}.${columnName}`);
+      }
+      if (
+        described.family !== "VECTOR" ||
+        described.element_type === null ||
+        described.dimension === null
+      ) {
+        fail(`DESCRIBE TABLE VECTOR row for ${tableKey}.${columnName} is incomplete`);
+      }
+    }
+  }
+  return index;
+}
+
+function expectedVectorColumnIndex(metadata, tableRows, options) {
+  const expected = new Map();
+  const selectedTables = new Set(
+    tableRows.map((table) =>
+      objectKey(
+        identifier(table.table_catalog, "table.table_catalog"),
+        identifier(table.table_schema, "table.table_schema"),
+        identifier(table.table_name, "table.table_name"),
+      ),
+    ),
+  );
+  for (const [rowIndex, column] of rows(metadata.columns, "columns").entries()) {
+    const catalog = identifier(column.table_catalog, `column[${rowIndex}].table_catalog`);
+    const schema = identifier(column.table_schema, `column[${rowIndex}].table_schema`);
+    const table = identifier(column.table_name, `column[${rowIndex}].table_name`);
+    const tableKey = objectKey(catalog, schema, table);
+    if (!selectedTables.has(tableKey)) continue;
+    const label = typeLabel(column);
+    const token = metadataTypeToken(column.data_type, `${label}.data_type`);
+    const probe = canonicalizeSnowflakeType(token, {
+      ...options,
+      allowIncompleteVector: true,
+      label,
+    });
+    if (probe.family !== "VECTOR") continue;
+    const columnName = identifier(column.column_name, `${label}.column_name`);
+    if (!expected.has(tableKey)) expected.set(tableKey, new Map());
+    if (expected.get(tableKey).has(columnName)) {
+      fail(`duplicate VECTOR column metadata for ${tableKey}.${columnName}`);
+    }
+    expected.get(tableKey).set(columnName, probe);
+  }
+  return expected;
+}
+
+function canonicalDataType(column, describeIndex, options = {}) {
+  const label = typeLabel(column);
+  const token = metadataTypeToken(column.data_type, `${label}.data_type`);
+  const probe = canonicalizeSnowflakeType(token, {
+    ...options,
+    allowIncompleteVector: true,
+    label,
+  });
+  const family = probe.family;
+
+  let canonical = probe;
+  if (!/[()]/.test(token)) {
+    canonical = typeWithMetadataParameters(column, token, options, label);
+  } else {
+    assertMetadataParameters(
+      canonical,
+      metadataParameters(column, label),
+      label,
+    );
+  }
+
+  if (family !== "VECTOR") return canonical;
+
+  const catalog = identifier(column.table_catalog, `${label}.table_catalog`);
+  const schema = identifier(column.table_schema, `${label}.table_schema`);
+  const table = identifier(column.table_name, `${label}.table_name`);
+  const columnName = identifier(column.column_name, `${label}.column_name`);
+  const tableKey = objectKey(catalog, schema, table);
+  const described = describeIndex.get(tableKey)?.get(columnName);
+  if (!described) {
+    if (canonical.element_type !== null && canonical.dimension !== null) {
+      return canonical;
+    }
+    fail(`VECTOR column ${tableKey}.${columnName} is missing its DESCRIBE TABLE signature`);
+  }
+
+  let describedCanonical;
+  try {
+    describedCanonical = canonicalizeSnowflakeType(described.type, {
+      ...options,
+      allowIncompleteVector: true,
+      label: `DESCRIBE TABLE ${tableKey}.${columnName}`,
+    });
+  } catch (error) {
+    fail(`malformed DESCRIBE TABLE row for ${tableKey}.${columnName}: ${error.message}`);
   }
   if (
-    family === "DATE" ||
-    family === "BOOLEAN" ||
-    family === "FLOAT" ||
-    family === "VARIANT" ||
-    family === "OBJECT" ||
-    family === "ARRAY" ||
-    family === "GEOGRAPHY" ||
-    family === "GEOMETRY" ||
-    family === "VECTOR"
+    describedCanonical.family !== "VECTOR" ||
+    describedCanonical.element_type === null ||
+    describedCanonical.dimension === null
   ) {
-    return {
-      family,
-      text: family,
-      precision: null,
-      scale: null,
-      length: null,
-    };
+    fail(`contradictory DESCRIBE TABLE row for ${tableKey}.${columnName}; expected a complete VECTOR signature`);
   }
-  fail(`unsupported Snowflake data type ${family}`);
+  if (
+    canonical.element_type !== null &&
+    (canonical.element_type !== describedCanonical.element_type ||
+      canonical.dimension !== describedCanonical.dimension)
+  ) {
+    fail(`contradictory VECTOR metadata for ${tableKey}.${columnName}`);
+  }
+  return describedCanonical;
 }
 
 function buildNamespaces(metadata, tableRows) {
@@ -348,7 +658,13 @@ function toProjectConstraint(constraint) {
   return projectConstraint;
 }
 
-function buildTables(metadata, tableRows, constraintsByTable) {
+function buildTables(
+  metadata,
+  tableRows,
+  constraintsByTable,
+  describeIndex,
+  options = {},
+) {
   const columnsByTable = new Map();
   for (const row of rows(metadata.columns, "columns")) {
     const catalog = identifier(row.table_catalog, "column.table_catalog");
@@ -388,7 +704,7 @@ function buildTables(metadata, tableRows, constraintsByTable) {
             id: columnId(catalog, schema, tableName, columnName),
             name: columnName,
             ordinal: index + 1,
-            data_type: canonicalDataType(columnRow),
+            data_type: canonicalDataType(columnRow, describeIndex, options),
             nullable: String(columnRow.is_nullable).toUpperCase() !== "NO",
             default: optionalString(columnRow.column_default),
             comment: optionalString(columnRow.comment),
@@ -447,8 +763,20 @@ export function snowflakeMetadataToCanonicalProject(metadata, options = {}) {
       ),
     ),
   );
+  const expectedVectorColumns = expectedVectorColumnIndex(
+    source,
+    tableRows,
+    options,
+  );
+  const describeIndex = buildDescribeTypeIndex(source, expectedVectorColumns);
   const constraintsByTable = buildConstraintIndexes(source, tablesByKey);
-  const tables = buildTables(source, tableRows, constraintsByTable);
+  const tables = buildTables(
+    source,
+    tableRows,
+    constraintsByTable,
+    describeIndex,
+    options,
+  );
   const project = {
     project_version: PROJECT_VERSION,
     physical_model: {
@@ -473,6 +801,7 @@ export function snowflakeMetadataToCanonicalProject(metadata, options = {}) {
 
 export function snowflakeMetadataToDiagram(metadata, options = {}) {
   const project = snowflakeMetadataToCanonicalProject(metadata, {
+    ...options,
     name: options.title || options.name,
   });
   return {
