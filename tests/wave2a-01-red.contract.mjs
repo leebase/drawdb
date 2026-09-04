@@ -222,25 +222,15 @@ function checkMetadataFixture({ columns = [metadataColumn("CHECKED", "SCORE", "N
       },
     ],
     columns,
-    tableConstraints: [
-      {
-        table_catalog: "ANALYTICS",
-        table_schema: "CORE",
-        table_name: "CHECKED",
-        constraint_catalog: "ANALYTICS",
-        constraint_schema: "CORE",
-        constraint_name: "CK_CHECKED_SCORE",
-        constraint_type: "CHECK",
-      },
-    ],
+    // CHECK_CONSTRAINTS is authoritative for CHECK rows. TABLE_CONSTRAINTS
+    // remains reserved for key constraints (PRIMARY/UNIQUE/FOREIGN KEY).
+    tableConstraints: [],
     checkConstraints: [
       {
         constraint_catalog: "ANALYTICS",
         constraint_schema: "CORE",
+        constraint_table: "CHECKED",
         constraint_name: "CK_CHECKED_SCORE",
-        table_catalog: "ANALYTICS",
-        table_schema: "CORE",
-        table_name: "CHECKED",
         check_clause: "SCORE >= 0",
       },
     ],
@@ -250,12 +240,22 @@ function checkMetadataFixture({ columns = [metadataColumn("CHECKED", "SCORE", "N
 }
 
 function mockSnowflakeDriver({
+  database = "ANALYTICS",
+  schema = "CORE",
   tableName = "CHECKED",
+  tables = [tableName],
   columns = [metadataColumn(tableName, "SCORE", "NUMBER", 1)],
   tableConstraints = [],
   checkConstraints = [],
 } = {}) {
-  const observed = { queries: [], destroyed: 0 };
+  const observed = { queries: [], checkQueries: [], destroyed: 0 };
+  const expectedCheckBinds = [database, schema, ...tables];
+  const expectedCheckQuery = [
+    "SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_TABLE, CONSTRAINT_NAME, CHECK_CLAUSE",
+    `FROM \"${database}\".INFORMATION_SCHEMA.CHECK_CONSTRAINTS`,
+    `WHERE CONSTRAINT_CATALOG = ? AND CONSTRAINT_SCHEMA = ? AND CONSTRAINT_TABLE IN (${tables.map(() => "?").join(", ")})`,
+    "ORDER BY CONSTRAINT_TABLE, CONSTRAINT_NAME",
+  ].join(" ");
   const tableRows = [
     {
       TABLE_CATALOG: "ANALYTICS",
@@ -266,7 +266,7 @@ function mockSnowflakeDriver({
     },
   ];
 
-  function rowsFor(sqlText) {
+  function rowsFor(sqlText, binds) {
     const upper = sqlText.toUpperCase();
     if (upper.includes("CURRENT_ACCOUNT()")) {
       return [
@@ -289,7 +289,21 @@ function mockSnowflakeDriver({
     }
     if (upper.includes(".TABLES")) return tableRows;
     if (upper.includes(".COLUMNS")) return columns;
-    if (upper.includes(".CHECK_CONSTRAINTS")) return checkConstraints;
+    if (upper.includes(".CHECK_CONSTRAINTS")) {
+      const normalizedSql = sqlText.replace(/\s+/g, " ").trim();
+      assert.equal(
+        normalizedSql.toUpperCase(),
+        expectedCheckQuery.toUpperCase(),
+        "CHECK_CONSTRAINTS query must select the official columns, use the database-qualified view, and apply the deterministic table filters",
+      );
+      assert.deepEqual(
+        binds,
+        expectedCheckBinds,
+        "CHECK_CONSTRAINTS query binds must be [database, schema, ...tables]",
+      );
+      observed.checkQueries.push({ sqlText, binds: [...binds] });
+      return checkConstraints;
+    }
     if (upper.includes(".TABLE_CONSTRAINTS")) return tableConstraints;
     if (upper.startsWith("SHOW PRIMARY KEYS")) return [];
     if (upper.startsWith("SHOW UNIQUE KEYS")) return [];
@@ -305,7 +319,7 @@ function mockSnowflakeDriver({
       observed.queries.push({ sqlText, binds });
       queueMicrotask(() => {
         try {
-          complete(undefined, {}, rowsFor(sqlText));
+          complete(undefined, {}, rowsFor(sqlText, binds));
         } catch (error) {
           complete(error, {}, []);
         }
@@ -457,23 +471,11 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
     const checkRow = {
       CONSTRAINT_CATALOG: "ANALYTICS",
       CONSTRAINT_SCHEMA: "CORE",
+      CONSTRAINT_TABLE: "CHECKED",
       CONSTRAINT_NAME: "CK_CHECKED_SCORE",
-      TABLE_CATALOG: "ANALYTICS",
-      TABLE_SCHEMA: "CORE",
-      TABLE_NAME: "CHECKED",
       CHECK_CLAUSE: "SCORE >= 0",
     };
-    const tableConstraint = {
-      CONSTRAINT_CATALOG: "ANALYTICS",
-      CONSTRAINT_SCHEMA: "CORE",
-      CONSTRAINT_NAME: "CK_CHECKED_SCORE",
-      TABLE_CATALOG: "ANALYTICS",
-      TABLE_SCHEMA: "CORE",
-      TABLE_NAME: "CHECKED",
-      CONSTRAINT_TYPE: "CHECK",
-    };
     const mock = mockSnowflakeDriver({
-      tableConstraints: [tableConstraint],
       checkConstraints: [checkRow],
     });
     const service = await connectedService(mock);
@@ -484,20 +486,22 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
       tables: ["CHECKED"],
     });
 
-    assert.ok(
-      mock.observed.queries.some(({ sqlText }) =>
-        /\bCHECK_CONSTRAINTS\b/i.test(sqlText),
-      ),
-      "reverse engineering must query INFORMATION_SCHEMA.CHECK_CONSTRAINTS",
+    assert.equal(
+      mock.observed.checkQueries.length,
+      1,
+      "reverse engineering must query INFORMATION_SCHEMA.CHECK_CONSTRAINTS exactly once",
     );
+    assert.deepEqual(mock.observed.checkQueries[0].binds, [
+      "ANALYTICS",
+      "CORE",
+      "CHECKED",
+    ]);
     assert.deepEqual(metadata.checkConstraints, [
       {
         constraint_catalog: "ANALYTICS",
         constraint_schema: "CORE",
+        constraint_table: "CHECKED",
         constraint_name: "CK_CHECKED_SCORE",
-        table_catalog: "ANALYTICS",
-        table_schema: "CORE",
-        table_name: "CHECKED",
         check_clause: "SCORE >= 0",
       },
     ]);
