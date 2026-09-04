@@ -3,6 +3,8 @@ import { describe, it } from "node:test";
 import {
   canonicalProjectToDiagram,
   diagramToCanonicalProject,
+  renderCanonicalSnowflakeDDL,
+  renderCanonicalSnowflakeStatements,
 } from "../src/erdTool/projectAdapter.js";
 
 function v1Project() {
@@ -129,6 +131,40 @@ function v2Project() {
   return diagramToCanonicalProject(newDiagram());
 }
 
+function bareVectorV1Project() {
+  const project = v1Project();
+  project.physical_model.name = "V1_UNRESOLVED_VECTOR";
+  project.physical_model.tables[0] = {
+    id: "table:ANALYTICS.CORE.EMBEDDINGS",
+    namespace_id: "namespace:ANALYTICS.CORE",
+    name: "EMBEDDINGS",
+    kind: "table",
+    columns: [
+      {
+        id: "column:ANALYTICS.CORE.EMBEDDINGS.VALUE",
+        name: "VALUE",
+        ordinal: 1,
+        data_type: {
+          family: "VECTOR",
+          text: "VECTOR",
+          precision: null,
+          scale: null,
+          length: null,
+        },
+        nullable: true,
+        default: null,
+        comment: "Missing element type and dimension",
+      },
+    ],
+    constraints: [],
+    comment: "Bare vector must remain unresolved",
+  };
+  project.diagram_layout.nodes = {
+    "table:ANALYTICS.CORE.EMBEDDINGS": { x: 40, y: 80 },
+  };
+  return project;
+}
+
 describe("Wave 2A canonical v2 migration scaffold", () => {
   it("migrates serialized v1 non-vector state to v2 without semantic loss", () => {
     const serialized = JSON.parse(JSON.stringify(v1Project()));
@@ -203,6 +239,71 @@ describe("Wave 2A canonical v2 migration scaffold", () => {
 
     assert.equal(JSON.stringify(second), JSON.stringify(first));
     assert.equal(JSON.stringify(third), JSON.stringify(second));
+  });
+
+  it("keeps migrated bare VECTOR unresolved while both canonical renderers fail closed", () => {
+    const opened = canonicalProjectToDiagram(
+      JSON.parse(JSON.stringify(bareVectorV1Project())),
+    );
+    const migrated = diagramToCanonicalProject(opened);
+    const reopened = diagramToCanonicalProject(
+      canonicalProjectToDiagram(JSON.parse(JSON.stringify(migrated))),
+    );
+    const dataType = reopened.physical_model.tables[0].columns[0].data_type;
+
+    assert.deepEqual(
+      {
+        family: dataType.family,
+        text: dataType.text,
+        vector_element_type: dataType.vector_element_type,
+        vector_dimension: dataType.vector_dimension,
+      },
+      {
+        family: "VECTOR",
+        text: "VECTOR",
+        vector_element_type: null,
+        vector_dimension: null,
+      },
+    );
+
+    for (const render of [
+      renderCanonicalSnowflakeDDL,
+      renderCanonicalSnowflakeStatements,
+    ]) {
+      assert.throws(
+        () => render(reopened),
+        (error) => {
+          assert.equal(error?.code, "UNRESOLVED_VECTOR");
+          assert.match(
+            error?.message ?? "",
+            /VECTOR.*element type.*dimension/i,
+          );
+          return true;
+        },
+      );
+    }
+  });
+
+  it("rejects nonempty legacy Snowflake field.check but accepts empty checks", () => {
+    const withLegacyCheck = newDiagram();
+    withLegacyCheck.tables[0].fields[0].check = "AMOUNT >= 0";
+    assert.throws(
+      () => diagramToCanonicalProject(withLegacyCheck),
+      (error) => {
+        assert.equal(error?.code, "LEGACY_FIELD_CHECK_UNSUPPORTED");
+        assert.equal(
+          error?.message,
+          "Legacy field.check requires explicit migration to table.checkConstraints",
+        );
+        return true;
+      },
+    );
+
+    for (const check of ["", "   "]) {
+      const emptyCheck = newDiagram();
+      emptyCheck.tables[0].fields[0].check = check;
+      assert.doesNotThrow(() => diagramToCanonicalProject(emptyCheck));
+    }
   });
 
   it("requires exact v2 scaffold keys and rejects inconsistent additions", () => {

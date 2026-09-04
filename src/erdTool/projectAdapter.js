@@ -266,6 +266,19 @@ function fail(message) {
   throw new Error(message);
 }
 
+function failWithCode(code, message) {
+  const error = new Error(message);
+  error.code = code;
+  throw error;
+}
+
+const LEGACY_FIELD_CHECK_ERROR_CODE = "LEGACY_FIELD_CHECK_UNSUPPORTED";
+const LEGACY_FIELD_CHECK_ERROR_MESSAGE =
+  "Legacy field.check requires explicit migration to table.checkConstraints";
+const UNRESOLVED_VECTOR_ERROR_CODE = "UNRESOLVED_VECTOR";
+const UNRESOLVED_VECTOR_ERROR_MESSAGE =
+  "VECTOR requires an INT or FLOAT element type and a positive dimension";
+
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -1130,6 +1143,9 @@ function validateDrawdbDocument(document) {
   const areas = requireArray(document.areas, "drawdb_document.areas");
   const types = requireArray(document.types, "drawdb_document.types");
   const enums = requireArray(document.enums, "drawdb_document.enums");
+  if (database === "snowflake") {
+    rejectLegacyFieldChecks(tables);
+  }
   validateDrawdbEntityKeys(document);
   requireObject(document.transform, "drawdb_document.transform");
   requireExactKeys(
@@ -1195,6 +1211,25 @@ function validateDrawdbDocument(document) {
       transform,
     }),
   );
+}
+
+function rejectLegacyFieldChecks(tables) {
+  if (!Array.isArray(tables)) return;
+  for (const table of tables) {
+    if (!isPlainObject(table) || !Array.isArray(table.fields)) continue;
+    for (const field of table.fields) {
+      if (
+        isPlainObject(field) &&
+        typeof field.check === "string" &&
+        field.check.trim()
+      ) {
+        failWithCode(
+          LEGACY_FIELD_CHECK_ERROR_CODE,
+          LEGACY_FIELD_CHECK_ERROR_MESSAGE,
+        );
+      }
+    }
+  }
 }
 
 function validatePhysicalModelV2(model) {
@@ -1777,6 +1812,9 @@ export function diagramToCanonicalProject({
   requireArray(tables, "tables");
   requireArray(relationships, "relationships");
   requireObject(transform, "transform");
+  if (database === undefined || database === "snowflake") {
+    rejectLegacyFieldChecks(tables);
+  }
 
   // Native files preserve every drawDB database target in drawdb_document.
   // The canonical physical model remains an empty, valid Snowflake projection
@@ -2318,6 +2356,13 @@ function namespaceForTable(model, table) {
 }
 
 function renderColumn(column) {
+  if (
+    column.data_type.family === "VECTOR" &&
+    (column.data_type.vector_element_type === null ||
+      column.data_type.vector_dimension === null)
+  ) {
+    failWithCode(UNRESOLVED_VECTOR_ERROR_CODE, UNRESOLVED_VECTOR_ERROR_MESSAGE);
+  }
   const parts = [column.name, column.data_type.text];
   if (!column.nullable) {
     parts.push("NOT NULL");
