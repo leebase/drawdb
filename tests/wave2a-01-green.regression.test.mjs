@@ -18,7 +18,16 @@ import {
 import { snowflakeMetadataToCanonicalProject } from "../src/erdTool/snowflakeMetadata.js";
 import {
   assertSemanticEqual,
+  semanticModel,
 } from "./wave2a-01-parity.mjs";
+
+function assertSemanticEqualIgnoringModelVersion(assert, actual, expected) {
+  const actualSemantic = { ...semanticModel(actual) };
+  const expectedSemantic = { ...semanticModel(expected) };
+  delete actualSemantic.modelVersion;
+  delete expectedSemantic.modelVersion;
+  assert.deepEqual(actualSemantic, expectedSemantic);
+}
 
 async function openSerializedProject(serialized) {
   const originalWindow = globalThis.window;
@@ -415,11 +424,13 @@ describe("Wave 2A accepted Snowflake regressions", () => {
     assert.equal(opened.canceled, false);
     assert.equal(opened.diagram.tables[0].name, "EVENTS");
     const project = diagramToCanonicalProject(opened.diagram);
-    assertSemanticEqual(assert, project, fixture.serialized);
+    assert.equal(project.physical_model.model_version, "2");
+    assertSemanticEqualIgnoringModelVersion(assert, project, fixture.serialized);
     const ddl = renderCanonicalSnowflakeDDL(project);
     const reopenedProject = parseSnowflakeDDLToCanonicalProject(ddl, {
       name: project.physical_model.name,
     });
+    assert.equal(reopenedProject.physical_model.model_version, "2");
     assertSemanticEqual(assert, reopenedProject, project);
     assert.equal(canonicalProjectToDiagram(reopenedProject).tables[0].name, "EVENTS");
   });
