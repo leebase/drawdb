@@ -140,15 +140,18 @@ function checkDiagram() {
             id: "check-amount",
             name: "CK_CHECKED_AMOUNT",
             expression: "AMOUNT >= 0",
-            validation: "UNKNOWN",
-            nameOrigin: "unknown",
+            // Editor-authored checks are enforced and their provenance is
+            // known at creation time. UNKNOWN/unknown are metadata-only
+            // values because Snowflake does not expose either fact.
+            validation: "VALIDATE",
+            nameOrigin: "explicit",
           },
           {
             id: "check-window",
             name: null,
             expression: "START_AT <= END_AT",
-            validation: "UNKNOWN",
-            nameOrigin: "unknown",
+            validation: "VALIDATE",
+            nameOrigin: "unnamed",
           },
         ],
       },
@@ -419,20 +422,35 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
         id: "check-amount",
         name: "CK_CHECKED_AMOUNT",
         expression: "AMOUNT >= 0",
-        validation: "UNKNOWN",
-        name_origin: "unknown",
+        validation: "VALIDATE",
+        name_origin: "explicit",
       },
       {
         id: "check-window",
         name: null,
         expression: "START_AT <= END_AT",
-        validation: "UNKNOWN",
-        name_origin: "unknown",
+        validation: "VALIDATE",
+        name_origin: "unnamed",
       },
     ]);
     assert.equal(ddl, renderCanonicalSnowflakeDDL(project));
+    assert.doesNotMatch(
+      ddl,
+      /\b(?:NOT\s+ENFORCED|RELY|DISABLE)\b/i,
+      "CHECK DDL must never use informational or disabled constraint grammar",
+    );
     assert.match(ddl, /CONSTRAINT CK_CHECKED_AMOUNT CHECK \(AMOUNT >= 0\)/);
     assert.match(ddl, /CHECK \(START_AT <= END_AT\)/);
+
+    const parsed = parseSnowflakeDDLToCanonicalProject(ddl, {
+      name: project.physical_model.name,
+    });
+    assertSemanticEqual(
+      assert,
+      parsed,
+      project,
+      "named and unnamed editor CHECKs must survive DDL parse-back",
+    );
   });
 
   it("issues a CHECK_CONSTRAINTS metadata query during reverse engineering", async () => {
@@ -624,7 +642,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
     try {
       project = diagramToCanonicalProject(fixture.diagram);
     } catch (error) {
-      assert.match(error.message, /check|legacy/i);
+      assert.equal(error?.code, fixture.expected.typedReject.code);
+      assert.equal(error?.message, fixture.expected.typedReject.message);
       return;
     }
     const checks = project.physical_model.tables[0].check_constraints;

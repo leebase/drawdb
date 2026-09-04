@@ -137,6 +137,14 @@ export const v1Fixtures = Object.freeze({
     expected: Object.freeze({
       expression: "AMOUNT >= 0",
       outcome: "migrate-or-typed-reject",
+      // The compatibility seam must either migrate this legacy field-level
+      // value into table.checkConstraints or return this exact typed error.
+      // Silent omission is never an acceptable v1 behavior.
+      typedReject: Object.freeze({
+        code: "LEGACY_FIELD_CHECK_UNSUPPORTED",
+        message:
+          "Legacy field.check requires explicit migration to table.checkConstraints",
+      }),
     }),
     diagram: {
       database: "snowflake",
