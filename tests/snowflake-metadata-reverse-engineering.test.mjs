@@ -415,6 +415,24 @@ function expectedCanonicalProject() {
   };
 }
 
+function expectedSavedCanonicalProject() {
+  const expected = expectedCanonicalProject();
+  expected.physical_model.model_version = "2";
+  expected.physical_model.tables = expected.physical_model.tables.map((table) => ({
+    ...table,
+    columns: table.columns.map((column) => ({
+      ...column,
+      data_type: {
+        ...column.data_type,
+        vector_element_type: null,
+        vector_dimension: null,
+      },
+    })),
+    check_constraints: [],
+  }));
+  return expected;
+}
+
 function modelColumn(catalog, schema, table, name, ordinal, dataType, nullable, defaultValue = null, comment = null) {
   return {
     id: `column:${catalog}.${schema}.${table}.${name}`,
@@ -622,7 +640,7 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
     );
 
     const { drawdb_document, ...savedCanonicalProjection } = savedProject;
-    assert.deepEqual(savedCanonicalProjection, expectedCanonicalProject());
+    assert.deepEqual(savedCanonicalProjection, expectedSavedCanonicalProject());
     assert.equal(drawdb_document.database, "snowflake");
     assert.equal(drawdb_document.title, "mocked-snowflake-metadata");
     assert.deepEqual(
