@@ -21,6 +21,8 @@ const projectFiles = Object.freeze({
     ipcRenderer.invoke("project:save", request),
   saveAs: (request: { contents: string; suggestedName: string }) =>
     ipcRenderer.invoke("project:save-as", request),
+  unsavedChanges: (request: { title?: string }) =>
+    ipcRenderer.invoke("dialog:unsaved-changes", request),
 });
 
 const ddlExport = Object.freeze({

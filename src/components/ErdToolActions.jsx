@@ -24,6 +24,7 @@ import { layoutDiagram } from "../erdTool/elkLayout";
 import ConnectionProfilesManager from "./ConnectionProfilesManager";
 import SnowflakeReverseEngineer from "./SnowflakeReverseEngineer";
 import {
+  confirmDesktopUnsavedChanges,
   exportDesktopConnectionDDL,
   hasDesktopSnowflake,
   hasDesktopProjectFiles,
@@ -301,14 +302,10 @@ export default function ErdToolActions({
     if (!desktopProjectFiles || !isNativeDocument) return true;
     if (savedNativeRevision !== null && !nativeDirty) return true;
 
-    const saveFirst = globalThis.window.confirm(
-      "This native ERD project has unsaved changes. Save before continuing?",
-    );
-    if (saveFirst) return saveProject();
-
-    return globalThis.window.confirm(
-      "Discard unsaved changes? Choose Cancel to keep the current project open.",
-    );
+    const choice = await confirmDesktopUnsavedChanges({ title });
+    if (choice === "save") return await saveProject();
+    if (choice === "discard") return true;
+    return false;
   };
 
   const saveProjectAs = async () => {

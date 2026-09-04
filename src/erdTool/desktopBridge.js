@@ -442,3 +442,19 @@ export async function saveDesktopProjectAs(diagram) {
   if (!api) throw new Error("Native project files are unavailable");
   return api.saveAs(saveRequest(diagram));
 }
+
+export async function confirmDesktopUnsavedChanges({ title } = {}) {
+  const api = globalThis.window?.drawdbDesktop?.projectFiles ?? projectFilesApi();
+  if (typeof api?.unsavedChanges === "function") {
+    const result = await api.unsavedChanges({ title });
+    return result?.choice ?? result;
+  }
+  if (typeof globalThis.window?.confirm === "function") {
+    const prompt = title
+      ? `Save changes to ${title} before continuing?`
+      : "This native ERD project has unsaved changes. Save before continuing?";
+    return globalThis.window.confirm(prompt) ? "save" : "cancel";
+  }
+  return "cancel";
+}
+

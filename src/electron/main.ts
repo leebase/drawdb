@@ -63,6 +63,10 @@ type DdlExportRequest = {
   provider?: string;
 };
 
+type UnsavedChangesRequest = {
+  title?: string;
+};
+
 function projectError(action: "open" | "save"): Error {
   const code =
     action === "open" ? "PROJECT_OPEN_FAILED" : "PROJECT_SAVE_FAILED";
@@ -207,6 +211,26 @@ function validateDdlExportRequest(payload: unknown): DdlExportRequest {
   };
 }
 
+function validateUnsavedChangesRequest(
+  payload: unknown,
+): UnsavedChangesRequest {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new Error("unsaved changes dialog request must be an object");
+  }
+  const record = payload as Record<string, unknown>;
+  const keys = Object.keys(record);
+  const allowedKeys = new Set(["title"]);
+  if (keys.some((key) => !allowedKeys.has(key))) {
+    throw new Error("unsaved changes dialog request has unexpected fields");
+  }
+  if (record.title !== undefined && typeof record.title !== "string") {
+    throw new Error("unsaved changes title must be a string");
+  }
+  return {
+    title: typeof record.title === "string" ? record.title : undefined,
+  };
+}
+
 function writeProjectAtomically(filePath: string, contents: string): void {
   const temporaryPath = path.join(
     path.dirname(filePath),
@@ -321,6 +345,31 @@ function registerProjectFileHandlers(): void {
     } catch {
       throw projectError("save");
     }
+  });
+
+  ipcMain.handle("dialog:unsaved-changes", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    const request = validateUnsavedChangesRequest(payload);
+    const title = request.title;
+    const result = await dialog.showMessageBox(
+      BrowserWindow.fromWebContents(event.sender),
+      {
+        type: "warning",
+        buttons: ["Save", "Don't Save", "Cancel"],
+        defaultId: 0,
+        cancelId: 2,
+        noLink: true,
+        message: `Save changes to ${title || "this project"}?`,
+        detail: "Your changes will be lost if you don't save them.",
+      },
+    );
+    const choice: "save" | "discard" | "cancel" =
+      result.response === 0
+        ? "save"
+        : result.response === 1
+          ? "discard"
+          : "cancel";
+    return { choice };
   });
 }
 

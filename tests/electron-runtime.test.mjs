@@ -92,6 +92,7 @@ before(async () => {
 async function startProductionMainWithElectronHarness({
   openDialogResult = { canceled: true, filePaths: [] },
   saveDialogResult = { canceled: true },
+  messageBoxResult = { response: 0 },
   userDataPath,
 } = {}) {
   const loadFiles = [];
@@ -102,6 +103,7 @@ async function startProductionMainWithElectronHarness({
   const menuTemplates = [];
   const openDialogCalls = [];
   const saveDialogCalls = [];
+  const messageBoxCalls = [];
   const sentMessages = [];
   let readyPromise;
 
@@ -112,6 +114,12 @@ async function startProductionMainWithElectronHarness({
 
     static getFocusedWindow() {
       return windows[0] ?? null;
+    }
+
+    static fromWebContents(webContents) {
+      return (
+        windows.find((window) => window.webContents === webContents) ?? null
+      );
     }
 
     constructor(options) {
@@ -181,6 +189,13 @@ async function startProductionMainWithElectronHarness({
           return Promise.reject(saveDialogResult);
         }
         return Promise.resolve(saveDialogResult);
+      },
+      showMessageBox(...args) {
+        messageBoxCalls.push(args);
+        if (messageBoxResult instanceof Error) {
+          return Promise.reject(messageBoxResult);
+        }
+        return Promise.resolve(messageBoxResult);
       },
     },
     Menu: {
@@ -256,6 +271,7 @@ async function startProductionMainWithElectronHarness({
     ipcHandlers,
     loadFiles,
     menuTemplates,
+    messageBoxCalls,
     openDialogCalls,
     requiredModules,
     saveDialogCalls,
@@ -549,6 +565,7 @@ describe("Electron runtime scaffold", () => {
     assert.match(preload, /ipcRenderer\.invoke\("project:open"\)/);
     assert.match(preload, /ipcRenderer\.invoke\("project:save"/);
     assert.match(preload, /ipcRenderer\.invoke\("project:save-as"/);
+    assert.match(preload, /ipcRenderer\.invoke\("dialog:unsaved-changes"/);
     assert.match(preload, /ipcRenderer\.invoke\("ddl:export"/);
     assert.match(preload, /ipcRenderer\.invoke\("snowflake:profiles"/);
     assert.match(preload, /ipcRenderer\.invoke\("snowflake:connect"/);
@@ -701,6 +718,7 @@ describe("SS-004 native project file bridge contract", () => {
       "connections:test",
       "connections:update",
       "ddl:export",
+      "dialog:unsaved-changes",
       "llm:clear-api-key",
       "llm:propose-schema",
       "llm:set-api-key",
@@ -752,6 +770,7 @@ describe("SS-004 native project file bridge contract", () => {
       "open",
       "save",
       "saveAs",
+      "unsavedChanges",
     ]);
     assert.deepEqual(Object.keys(desktopApi.snowflake).sort(), [
       "connect",
@@ -780,6 +799,7 @@ describe("SS-004 native project file bridge contract", () => {
     await desktopApi.projectFiles.open();
     await desktopApi.projectFiles.save(saveRequest);
     await desktopApi.projectFiles.saveAs(saveRequest);
+    await desktopApi.projectFiles.unsavedChanges({ title: "model.erd.json" });
     const ddlRequest = {
       contents: "CREATE TABLE T (ID NUMBER);\n",
       suggestedName: "model.sql",
@@ -838,6 +858,10 @@ describe("SS-004 native project file bridge contract", () => {
       { channel: "project:open", payload: undefined },
       { channel: "project:save", payload: saveRequest },
       { channel: "project:save-as", payload: saveRequest },
+      {
+        channel: "dialog:unsaved-changes",
+        payload: { title: "model.erd.json" },
+      },
       { channel: "ddl:export", payload: ddlRequest },
       { channel: "connections:list", payload: undefined },
       { channel: "connections:create", payload: connectionProfile },
@@ -990,8 +1014,11 @@ describe("SS-004 native project file bridge contract", () => {
     );
     assert.match(actions, /confirmNativeDocumentReplacement/);
     assert.match(actions, /await confirmNativeDocumentReplacement\(\)/);
-    assert.match(actions, /This native ERD project has unsaved changes/);
-    assert.match(actions, /Discard unsaved changes/);
+    assert.match(actions, /confirmDesktopUnsavedChanges/);
+    assert.match(
+      actions,
+      /await confirmDesktopUnsavedChanges\(\{\s*title\s*\}\)/,
+    );
     assert.match(actions, /onDesktopProjectSaveRequest/);
     assert.match(actions, /onDesktopProjectSaveAsRequest/);
     assert.match(actions, /onDesktopProjectOpenRequest/);
@@ -1600,6 +1627,122 @@ describe("SS-004 native project file bridge contract", () => {
       assert.equal(fs.existsSync(projectPath), false);
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  it("prompts for unsaved changes through a native modal dialog", async () => {
+    const main = fs.readFileSync(mainPath, "utf8");
+    assert.match(main, /"dialog:unsaved-changes"/);
+    assert.match(main, /showMessageBox/);
+    assert.match(
+      main,
+      /buttons:\s*\[\s*"Save",\s*"Don't Save",\s*"Cancel"\s*\]/,
+    );
+    assert.match(main, /cancelId:\s*2/);
+
+    const runtime = await startProductionMainWithElectronHarness({
+      messageBoxResult: { response: 0 },
+    });
+    const handler = getIpcHandler(runtime, "dialog:unsaved-changes");
+
+    const saveResult = await handler({ title: "Custom Title" });
+    assert.deepEqual(saveResult, { choice: "save" });
+    assert.equal(runtime.messageBoxCalls.length, 1);
+    const [targetWindow, options] = runtime.messageBoxCalls[0];
+    assert.equal(targetWindow, runtime.windows[0]);
+    assert.equal(options.type, "warning");
+    assert.deepEqual(options.buttons, ["Save", "Don't Save", "Cancel"]);
+    assert.equal(options.defaultId, 0);
+    assert.equal(options.cancelId, 2);
+    assert.equal(options.noLink, true);
+    assert.equal(options.message, "Save changes to Custom Title?");
+    assert.equal(
+      options.detail,
+      "Your changes will be lost if you don't save them.",
+    );
+
+    const discardRuntime = await startProductionMainWithElectronHarness({
+      messageBoxResult: { response: 1 },
+    });
+    assert.deepEqual(
+      await getIpcHandler(discardRuntime, "dialog:unsaved-changes")({}),
+      { choice: "discard" },
+    );
+    assert.equal(
+      discardRuntime.messageBoxCalls[0][1].message,
+      "Save changes to this project?",
+    );
+
+    const cancelRuntime = await startProductionMainWithElectronHarness({
+      messageBoxResult: { response: 2 },
+    });
+    assert.deepEqual(
+      await getIpcHandler(
+        cancelRuntime,
+        "dialog:unsaved-changes",
+      )({ title: "" }),
+      { choice: "cancel" },
+    );
+  });
+
+  it("rejects invalid unsaved changes dialog requests", async () => {
+    const runtime = await startProductionMainWithElectronHarness();
+    const handler = getIpcHandler(runtime, "dialog:unsaved-changes");
+
+    await assert.rejects(handler(null), /must be an object/);
+    await assert.rejects(handler({ extra: 1 }), /unexpected fields/);
+    await assert.rejects(handler({ title: 123 }), /title must be a string/);
+  });
+
+  it("handles desktop unsaved changes bridge and web fallback mapping without a DOM", async () => {
+    const { confirmDesktopUnsavedChanges } = await import(
+      pathToFileURL(desktopBridgePath).href
+    );
+
+    const originalWindow = globalThis.window;
+    try {
+      let promptMessage = "";
+      globalThis.window = {
+        confirm: (msg) => {
+          promptMessage = msg;
+          return true;
+        },
+      };
+      assert.equal(
+        await confirmDesktopUnsavedChanges({ title: "Web Diagram" }),
+        "save",
+      );
+      assert.match(promptMessage, /Save changes to Web Diagram/);
+
+      globalThis.window = {
+        confirm: () => false,
+      };
+      assert.equal(
+        await confirmDesktopUnsavedChanges({ title: "Web Diagram" }),
+        "cancel",
+      );
+
+      globalThis.window = {};
+      assert.equal(await confirmDesktopUnsavedChanges(), "cancel");
+
+      let bridgePayload = null;
+      globalThis.window = {
+        drawdbDesktop: {
+          projectFiles: {
+            unsavedChanges: async (req) => {
+              bridgePayload = req;
+              return { choice: "cancel" };
+            },
+          },
+        },
+      };
+      assert.equal(
+        await confirmDesktopUnsavedChanges({ title: "Desktop Diagram" }),
+        "cancel",
+      );
+      assert.deepEqual(bridgePayload, { title: "Desktop Diagram" });
+    } finally {
+      globalThis.window = originalWindow;
     }
   });
 });
