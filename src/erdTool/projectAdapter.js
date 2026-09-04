@@ -1,5 +1,6 @@
 const PROJECT_VERSION = "1";
-const MODEL_VERSION = "1";
+const MODEL_VERSION = "2";
+const LEGACY_MODEL_VERSION = "1";
 const SNOWFLAKE_IDENTIFIER_MAX_LENGTH = 255;
 const SENSITIVE_PROJECT_KEY =
   /credential|password|passphrase|secret|token|connection|account|warehouse|role|session|api[_-]?key|private[_-]?key|access[_-]?key|auth(?:entication)?/i;
@@ -46,6 +47,7 @@ const TABLE_KEYS = new Set([
   "kind",
   "columns",
   "constraints",
+  "check_constraints",
   "comment",
 ]);
 const COLUMN_KEYS = new Set([
@@ -63,7 +65,17 @@ const DATA_TYPE_KEYS = new Set([
   "precision",
   "scale",
   "length",
+  "vector_element_type",
+  "vector_dimension",
 ]);
+const LEGACY_TABLE_KEYS = new Set(
+  [...TABLE_KEYS].filter((key) => key !== "check_constraints"),
+);
+const LEGACY_DATA_TYPE_KEYS = new Set(
+  [...DATA_TYPE_KEYS].filter(
+    (key) => key !== "vector_element_type" && key !== "vector_dimension",
+  ),
+);
 const CONSTRAINT_KEYS = new Set([
   "id",
   "name",
@@ -888,13 +900,43 @@ function validateDataType(dataType, label) {
   );
   const scale = requireOptionalInt(dataType.scale, `${label}.scale`);
   const length = requireOptionalInt(dataType.length, `${label}.length`);
+  const vectorElementType =
+    dataType.vector_element_type === null
+      ? null
+      : requireNonblankString(
+          dataType.vector_element_type,
+          `${label}.vector_element_type`,
+        );
+  const vectorDimension = requireOptionalInt(
+    dataType.vector_dimension,
+    `${label}.vector_dimension`,
+  );
+  if (family !== "VECTOR") {
+    if (vectorElementType !== null || vectorDimension !== null) {
+      fail(
+        `${label}.vector_element_type and ${label}.vector_dimension must be null for ${family}`,
+      );
+    }
+  } else if (vectorElementType !== null || vectorDimension !== null) {
+    fail(
+      `${label}.vector_element_type and ${label}.vector_dimension must remain null for the unresolved VECTOR scaffold`,
+    );
+  }
   assertTypeBounds(family, { precision, scale, length }, label);
   const text = requireNonblankString(dataType.text, `${label}.text`);
   const expected = canonicalTypeText(family, { precision, scale, length });
   if (text !== expected) {
     fail(`${label}.text must equal ${JSON.stringify(expected)}`);
   }
-  return { family, text, precision, scale, length };
+  return {
+    family,
+    text,
+    precision,
+    scale,
+    length,
+    vector_element_type: vectorElementType,
+    vector_dimension: vectorDimension,
+  };
 }
 
 function fieldSizeFromDataType(dataType) {
@@ -984,7 +1026,15 @@ function dataTypeFromField(field) {
 
   assertTypeBounds(family, { precision, scale, length }, label);
   const text = canonicalTypeText(family, { precision, scale, length });
-  return { family, text, precision, scale, length };
+  return {
+    family,
+    text,
+    precision,
+    scale,
+    length,
+    vector_element_type: null,
+    vector_dimension: null,
+  };
 }
 
 function sortById(items) {
@@ -1147,7 +1197,7 @@ function validateDrawdbDocument(document) {
   );
 }
 
-function validatePhysicalModel(model) {
+function validatePhysicalModelV2(model) {
   requireObject(model, "physical_model");
   requireExactKeys(model, PHYSICAL_MODEL_KEYS, "physical model");
   assertNoForbiddenKeys(model, "physical_model");
@@ -1158,7 +1208,7 @@ function validatePhysicalModel(model) {
   );
   if (modelVersion !== MODEL_VERSION) {
     fail(
-      `Unsupported model_version ${JSON.stringify(modelVersion)}; expected "1"`,
+      `Unsupported model_version ${JSON.stringify(modelVersion)}; expected "2"`,
     );
   }
   const name = requireNonblankString(model.name, "name");
@@ -1221,6 +1271,14 @@ function validatePhysicalModel(model) {
       fail("columns must have unique ids");
     }
 
+    const checkConstraints = requireArray(
+      table.check_constraints,
+      "check_constraints",
+    );
+    if (checkConstraints.length !== 0) {
+      fail("check_constraints must be empty in the model-v2 scaffold");
+    }
+
     const constraints = requireArray(table.constraints, "constraints").map(
       (constraint, cIndex) => {
         requireObject(constraint, `constraints[${cIndex}]`);
@@ -1274,6 +1332,7 @@ function validatePhysicalModel(model) {
       kind: requireNonblankString(table.kind, "kind"),
       columns,
       constraints,
+      check_constraints: [],
       comment: requireOptionalString(table.comment, "comment"),
     };
   });
@@ -1482,6 +1541,76 @@ function validatePhysicalModel(model) {
     tables,
     relationships,
   };
+}
+
+function migratePhysicalModelV1ToV2(model) {
+  requireObject(model, "physical_model");
+  requireExactKeys(model, PHYSICAL_MODEL_KEYS, "physical model");
+  assertNoForbiddenKeys(model, "physical_model");
+
+  const tables = requireArray(model.tables, "tables").map((table, tableIndex) => {
+    requireObject(table, `tables[${tableIndex}]`);
+    requireExactKeys(table, LEGACY_TABLE_KEYS, `tables[${tableIndex}]`);
+    const columns = requireArray(
+      table.columns,
+      `tables[${tableIndex}].columns`,
+    ).map((column, columnIndex) => {
+      requireObject(
+        column,
+        `tables[${tableIndex}].columns[${columnIndex}]`,
+      );
+      requireExactKeys(
+        column,
+        COLUMN_KEYS,
+        `tables[${tableIndex}].columns[${columnIndex}]`,
+      );
+      requireObject(
+        column.data_type,
+        `tables[${tableIndex}].columns[${columnIndex}].data_type`,
+      );
+      requireExactKeys(
+        column.data_type,
+        LEGACY_DATA_TYPE_KEYS,
+        `tables[${tableIndex}].columns[${columnIndex}].data_type`,
+      );
+      return {
+        ...column,
+        data_type: {
+          ...column.data_type,
+          vector_element_type: null,
+          vector_dimension: null,
+        },
+      };
+    });
+    return {
+      ...table,
+      columns,
+      check_constraints: [],
+    };
+  });
+
+  return {
+    ...model,
+    model_version: MODEL_VERSION,
+    tables,
+  };
+}
+
+function validatePhysicalModel(model) {
+  requireObject(model, "physical_model");
+  const modelVersion = requireNonblankString(
+    model.model_version,
+    "model_version",
+  );
+  if (modelVersion === LEGACY_MODEL_VERSION) {
+    return validatePhysicalModelV2(migratePhysicalModelV1ToV2(model));
+  }
+  if (modelVersion === MODEL_VERSION) {
+    return validatePhysicalModelV2(model);
+  }
+  fail(
+    `Unsupported model_version ${JSON.stringify(modelVersion)}; expected "1" or "2"`,
+  );
 }
 
 export function canonicalProjectToDiagram(project) {
@@ -1974,6 +2103,7 @@ export function diagramToCanonicalProject({
         }),
       ),
       constraints: sortById(constraints),
+      check_constraints: [],
       comment:
         table.comment === undefined ||
         table.comment === null ||
@@ -2083,6 +2213,7 @@ export function diagramToCanonicalProject({
       kind: table.kind,
       columns: table.columns,
       constraints: table.constraints,
+      check_constraints: table.check_constraints,
       comment: table.comment,
     })),
   );
@@ -2441,6 +2572,8 @@ function parseSnowflakeDataType(value) {
     precision,
     scale,
     length,
+    vector_element_type: null,
+    vector_dimension: null,
   };
 }
 
@@ -2684,6 +2817,7 @@ function parseSnowflakeCreateTable(statement) {
       kind: "table",
       columns,
       constraints,
+      check_constraints: [],
       comment: rawComment === undefined ? null : sqlStringLiteralValue(rawComment),
     },
   };
@@ -2979,4 +3113,3 @@ export function renderCanonicalSnowflakeStatements(
 
   return statements;
 }
-

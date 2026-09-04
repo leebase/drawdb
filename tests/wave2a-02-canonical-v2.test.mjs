@@ -1,0 +1,269 @@
+import assert from "node:assert/strict";
+import { describe, it } from "node:test";
+import {
+  canonicalProjectToDiagram,
+  diagramToCanonicalProject,
+} from "../src/erdTool/projectAdapter.js";
+
+function v1Project() {
+  return {
+    project_version: "1",
+    physical_model: {
+      model_version: "1",
+      name: "V1_EVENTS",
+      namespaces: [
+        {
+          id: "namespace:ANALYTICS.CORE",
+          catalog: "ANALYTICS",
+          schema: "CORE",
+        },
+      ],
+      tables: [
+        {
+          id: "table:ANALYTICS.CORE.EVENTS",
+          namespace_id: "namespace:ANALYTICS.CORE",
+          name: "EVENTS",
+          kind: "table",
+          columns: [
+            {
+              id: "column:ANALYTICS.CORE.EVENTS.EVENT_ID",
+              name: "EVENT_ID",
+              ordinal: 1,
+              data_type: {
+                family: "NUMBER",
+                text: "NUMBER(38, 0)",
+                precision: 38,
+                scale: 0,
+                length: null,
+              },
+              nullable: false,
+              default: null,
+              comment: "Stable event id",
+            },
+            {
+              id: "column:ANALYTICS.CORE.EVENTS.LABEL",
+              name: "LABEL",
+              ordinal: 2,
+              data_type: {
+                family: "VARCHAR",
+                text: "VARCHAR(320)",
+                precision: null,
+                scale: null,
+                length: 320,
+              },
+              nullable: true,
+              default: "'event'",
+              comment: "Human label",
+            },
+          ],
+          constraints: [
+            {
+              id: "constraint:ANALYTICS.CORE.EVENTS.PK_EVENTS",
+              name: "PK_EVENTS",
+              kind: "primary_key",
+              columns: ["column:ANALYTICS.CORE.EVENTS.EVENT_ID"],
+              referenced_table_id: null,
+              referenced_columns: [],
+            },
+          ],
+          comment: "Supported v1 fixture",
+        },
+      ],
+      relationships: [],
+    },
+    diagram_layout: {
+      nodes: {
+        "table:ANALYTICS.CORE.EVENTS": { x: 40, y: 80 },
+      },
+      viewport: { x: 0, y: 0, zoom: 1 },
+    },
+  };
+}
+
+function newDiagram() {
+  return {
+    database: "snowflake",
+    title: "V2_EVENTS",
+    tables: [
+      {
+        id: "events",
+        name: "EVENTS",
+        x: 40,
+        y: 80,
+        fields: [
+          {
+            id: "event-id",
+            name: "EVENT_ID",
+            type: "NUMBER",
+            size: "38,0",
+            default: "",
+            check: "",
+            primary: true,
+            unique: false,
+            notNull: true,
+            increment: false,
+            comment: "Stable event id",
+          },
+          {
+            id: "label",
+            name: "LABEL",
+            type: "VARCHAR",
+            size: 320,
+            default: "",
+            check: "",
+            primary: false,
+            unique: false,
+            notNull: false,
+            increment: false,
+            comment: "Human label",
+          },
+        ],
+      },
+    ],
+    relationships: [],
+    transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+  };
+}
+
+function v2Project() {
+  return diagramToCanonicalProject(newDiagram());
+}
+
+describe("Wave 2A canonical v2 migration scaffold", () => {
+  it("migrates serialized v1 non-vector state to v2 without semantic loss", () => {
+    const serialized = JSON.parse(JSON.stringify(v1Project()));
+    const before = JSON.stringify(serialized);
+
+    const diagram = canonicalProjectToDiagram(serialized);
+    const migrated = diagramToCanonicalProject(diagram);
+
+    assert.equal(migrated.project_version, "1");
+    assert.equal(migrated.physical_model.model_version, "2");
+    assert.equal(JSON.stringify(serialized), before);
+    assert.deepEqual(
+      migrated.physical_model.tables[0].constraints,
+      v1Project().physical_model.tables[0].constraints,
+    );
+    assert.deepEqual(
+      migrated.physical_model.tables[0].columns.map(
+        (column) => column.data_type,
+      ),
+      [
+        {
+          family: "NUMBER",
+          text: "NUMBER(38, 0)",
+          precision: 38,
+          scale: 0,
+          length: null,
+          vector_element_type: null,
+          vector_dimension: null,
+        },
+        {
+          family: "VARCHAR",
+          text: "VARCHAR(320)",
+          precision: null,
+          scale: null,
+          length: 320,
+          vector_element_type: null,
+          vector_dimension: null,
+        },
+      ],
+    );
+    assert.deepEqual(migrated.physical_model.tables[0].check_constraints, []);
+  });
+
+  it("emits v2 physical writes with nullable vector fields and empty checks", () => {
+    const project = v2Project();
+
+    assert.equal(project.project_version, "1");
+    assert.equal(project.physical_model.model_version, "2");
+    for (const column of project.physical_model.tables[0].columns) {
+      assert.deepEqual(
+        {
+          vector_element_type: column.data_type.vector_element_type,
+          vector_dimension: column.data_type.vector_dimension,
+        },
+        { vector_element_type: null, vector_dimension: null },
+      );
+    }
+    assert.deepEqual(project.physical_model.tables[0].check_constraints, []);
+  });
+
+  it("keeps v2 migration and JSON serialize/reopen idempotent", () => {
+    const first = diagramToCanonicalProject(
+      canonicalProjectToDiagram(JSON.parse(JSON.stringify(v1Project()))),
+    );
+    const reopened = JSON.parse(JSON.stringify(first));
+    const second = diagramToCanonicalProject(
+      canonicalProjectToDiagram(reopened),
+    );
+    const third = diagramToCanonicalProject(
+      canonicalProjectToDiagram(JSON.parse(JSON.stringify(second))),
+    );
+
+    assert.equal(JSON.stringify(second), JSON.stringify(first));
+    assert.equal(JSON.stringify(third), JSON.stringify(second));
+  });
+
+  it("requires exact v2 scaffold keys and rejects inconsistent additions", () => {
+    const missingTypeKey = v2Project();
+    delete missingTypeKey.physical_model.tables[0].columns[0].data_type
+      .vector_dimension;
+    assert.throws(
+      () => canonicalProjectToDiagram(missingTypeKey),
+      /missing required vector_dimension/i,
+    );
+
+    const unknownTypeKey = v2Project();
+    unknownTypeKey.physical_model.tables[0].columns[0].data_type.unexpected =
+      null;
+    assert.throws(
+      () => canonicalProjectToDiagram(unknownTypeKey),
+      /unexpected field unexpected/i,
+    );
+
+    const missingChecks = v2Project();
+    delete missingChecks.physical_model.tables[0].check_constraints;
+    assert.throws(
+      () => canonicalProjectToDiagram(missingChecks),
+      /missing required check_constraints/i,
+    );
+
+    const nonemptyChecks = v2Project();
+    nonemptyChecks.physical_model.tables[0].check_constraints = [{}];
+    assert.throws(
+      () => canonicalProjectToDiagram(nonemptyChecks),
+      /check_constraints.*empty/i,
+    );
+
+    const nonVectorParameters = v2Project();
+    nonVectorParameters.physical_model.tables[0].columns[0].data_type.vector_element_type =
+      "INT";
+    assert.throws(
+      () => canonicalProjectToDiagram(nonVectorParameters),
+      /vector_element_type.*null.*NUMBER/i,
+    );
+
+    const inconsistentVector = v2Project();
+    inconsistentVector.physical_model.tables[0].columns[0].data_type = {
+      family: "VECTOR",
+      text: "VECTOR",
+      precision: null,
+      scale: null,
+      length: null,
+      vector_element_type: "INT",
+      vector_dimension: null,
+    };
+    assert.throws(
+      () => canonicalProjectToDiagram(inconsistentVector),
+      /vector_element_type.*remain null.*VECTOR/i,
+    );
+
+    const unknownVersion = v2Project();
+    unknownVersion.physical_model.model_version = "3";
+    assert.throws(
+      () => canonicalProjectToDiagram(unknownVersion),
+      /unsupported model_version.*1.*2/i,
+    );
+  });
+});

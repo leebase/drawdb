@@ -962,7 +962,7 @@ describe("diagramToCanonicalProject", () => {
 
     assert.equal(exported.project_version, "1");
     const model = exported.physical_model;
-    assert.equal(model.model_version, "1");
+    assert.equal(model.model_version, "2");
     assert.ok(model.tables.some((t) => t.id === "table:ANALYTICS.CORE.CLIENT"));
     assert.ok(
       model.tables.some((t) =>
@@ -1416,6 +1416,8 @@ describe("diagramToCanonicalProject", () => {
       precision: 38,
       scale: 0,
       length: null,
+      vector_element_type: null,
+      vector_dimension: null,
     });
     assert.deepEqual(columns[1].data_type, {
       family: "TIMESTAMP_NTZ",
@@ -1423,6 +1425,8 @@ describe("diagramToCanonicalProject", () => {
       precision: 9,
       scale: null,
       length: null,
+      vector_element_type: null,
+      vector_dimension: null,
     });
   });
 
