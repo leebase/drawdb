@@ -90,11 +90,20 @@ export default function DiagramContextProvider({ children }) {
       }
       tableName = `TABLE_${index}`;
     }
+    let posX = transform.pan.x;
+    let posY = transform.pan.y;
+    while (
+      tables.some((t) => Math.abs(t.x - posX) < 24 && Math.abs(t.y - posY) < 24)
+    ) {
+      posX += 32;
+      posY += 32;
+    }
+
     const newTable = {
       id,
       name: tableName,
-      x: transform.pan.x,
-      y: transform.pan.y,
+      x: posX,
+      y: posY,
       locked: false,
       fields: [
         database === DB.SNOWFLAKE
