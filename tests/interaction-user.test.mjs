@@ -131,6 +131,16 @@ describe("User Interaction E2E (macOS Electron)", { timeout: 60000 }, () => {
 
     const copyDdlBtn = page.locator("button").filter({ hasText: /^Copy DDL$/i }).first();
     assert.equal(await copyDdlBtn.isVisible(), true, "Copy DDL button must be visible in modal footer");
+    assert.equal(
+      await page.locator('[data-testid="erd-deploy-ddl"]').count(),
+      0,
+      "Deploy to Snowflake control must be absent from the DDL modal",
+    );
+    assert.equal(
+      await page.locator("button").filter({ hasText: /^Deploy to Snowflake/i }).count(),
+      0,
+      "Deploy to Snowflake button must not be rendered",
+    );
 
     await copyDdlBtn.click();
     await page.waitForTimeout(300);

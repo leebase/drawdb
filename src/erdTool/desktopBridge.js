@@ -246,14 +246,6 @@ export async function reverseEngineerDesktopSnowflake(request) {
   return metadata;
 }
 
-export async function executeDesktopSnowflakeDdl(request) {
-  const result = await requireSnowflakeApi().executeDdl(request);
-  if (!result || typeof result !== "object") {
-    throw new Error("Snowflake DDL execution returned an invalid response");
-  }
-  return result;
-}
-
 export async function exportDesktopSnowflakeDDL(
   diagram,
   generatedContents,
@@ -473,4 +465,3 @@ export async function confirmDesktopUnsavedChanges({ title } = {}) {
   }
   return "cancel";
 }
-

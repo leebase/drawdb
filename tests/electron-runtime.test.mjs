@@ -584,6 +584,56 @@ describe("Electron runtime scaffold", () => {
     assert.doesNotMatch(preload, /require\s*\(|node:fs/);
   });
 
+  it("enforces the D161 deploy boundary without an alternate renderer SQL bridge", () => {
+    const rendererRoot = path.join(repositoryRoot, "src");
+    const productionSources = [
+      mainPath,
+      preloadPath,
+      desktopBridgePath,
+      path.join(
+        rendererRoot,
+        "components",
+        "EditorHeader",
+        "Modal",
+        "Modal.jsx",
+      ),
+    ];
+
+    for (const sourcePath of productionSources) {
+      const source = fs.readFileSync(sourcePath, "utf8");
+      assert.doesNotMatch(
+        source,
+        /snowflake:execute-ddl|executeDesktopSnowflakeDdl|\bexecuteDdl\b/,
+        `D161 execution route must be absent from ${sourcePath}`,
+      );
+    }
+
+    const rendererFiles = fs
+      .readdirSync(rendererRoot, { recursive: true, withFileTypes: true })
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          /\.[cm]?[jt]sx?$/.test(entry.name) &&
+          !entry.parentPath.startsWith(path.join(rendererRoot, "electron")),
+      );
+
+    for (const entry of rendererFiles) {
+      const sourcePath = path.join(entry.parentPath, entry.name);
+      const source = fs.readFileSync(sourcePath, "utf8");
+      assert.doesNotMatch(
+        source,
+        /snowflake:execute-ddl|executeDesktopSnowflakeDdl|\bexecuteDdl\b/,
+        `renderer sources must not expose Snowflake SQL execution: ${sourcePath}`,
+      );
+    }
+
+    assert.equal(
+      fs.existsSync(path.join(rendererRoot, "components", "SnowflakeDeployModal.jsx")),
+      false,
+      "the deploy modal component must be deleted",
+    );
+  });
+
   it("starts the production build from file URLs without a web server", async () => {
     const runtime = await startProductionMainWithElectronHarness();
 
@@ -730,7 +780,6 @@ describe("SS-004 native project file bridge contract", () => {
       "project:save-as",
       "snowflake:connect",
       "snowflake:disconnect",
-      "snowflake:execute-ddl",
       "snowflake:list-databases",
       "snowflake:list-schemas",
       "snowflake:list-tables",
@@ -753,7 +802,7 @@ describe("SS-004 native project file bridge contract", () => {
       "runtimeVersion",
       "snowflake",
     ]);
-    assert.equal(desktopApi.runtimeVersion, 4);
+    assert.equal(desktopApi.runtimeVersion, 5);
     assert.equal(Object.isFrozen(desktopApi.projectFiles), true);
     assert.equal(Object.isFrozen(desktopApi.ddlExport), true);
     assert.equal(Object.isFrozen(desktopApi.connections), true);
@@ -778,13 +827,13 @@ describe("SS-004 native project file bridge contract", () => {
     assert.deepEqual(Object.keys(desktopApi.snowflake).sort(), [
       "connect",
       "disconnect",
-      "executeDdl",
       "listDatabases",
       "listProfiles",
       "listSchemas",
       "listTables",
       "reverseEngineer",
     ]);
+    assert.equal("executeDdl" in desktopApi.snowflake, false);
     assert.deepEqual(Object.keys(desktopApi.llm).sort(), [
       "clearApiKey",
       "proposeSchema",

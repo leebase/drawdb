@@ -75,8 +75,6 @@ const snowflake = Object.freeze({
     schema: string;
     tables: string[];
   }) => ipcRenderer.invoke("snowflake:reverse-engineer", request),
-  executeDdl: (request: { sessionId: string; statements: string[] }) =>
-    ipcRenderer.invoke("snowflake:execute-ddl", request),
 });
 
 const llm = Object.freeze({
@@ -107,7 +105,7 @@ ipcRenderer.on(connectionForwardEngineerChannel, () => {
 contextBridge.exposeInMainWorld(
   "drawdbDesktop",
   Object.freeze({
-    runtimeVersion: 4,
+    runtimeVersion: 5,
     projectFiles,
     ddlExport,
     connections,

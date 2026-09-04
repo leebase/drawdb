@@ -507,10 +507,6 @@ function registerSnowflakeHandlers(): void {
     assertTrustedProjectSender(event);
     return await snowflakeService.reverseEngineer(payload);
   });
-  ipcMain.handle("snowflake:execute-ddl", async (event, payload: unknown) => {
-    assertTrustedProjectSender(event);
-    return await snowflakeService.executeDdl(payload);
-  });
   ipcMain.handle("desktop:build-info", (event) => {
     assertTrustedProjectSender(event);
     return {
