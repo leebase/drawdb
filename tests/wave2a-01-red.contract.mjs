@@ -467,6 +467,34 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
     );
   });
 
+  it("preserves named and unnamed table CHECKs through serialized project reopen and DDL reparse", async () => {
+    // JSON cloning plus the real desktop open/conversion seam models a native
+    // project file without touching a filesystem or starting Electron.
+    const original = diagramToCanonicalProject(checkDiagram());
+    const serializedClone = JSON.parse(JSON.stringify(original));
+    const opened = await openSerializedProject(serializedClone);
+    assert.equal(opened.canceled, false);
+
+    const reopened = diagramToCanonicalProject(opened.diagram);
+    const ddl = renderCanonicalSnowflakeDDL(reopened);
+    const reparsed = parseSnowflakeDDLToCanonicalProject(ddl, {
+      name: original.physical_model.name,
+    });
+
+    assertSemanticEqual(
+      assert,
+      reopened,
+      original,
+      "named and unnamed table CHECKs must survive serialized project reopen",
+    );
+    assertSemanticEqual(
+      assert,
+      reparsed,
+      original,
+      "named and unnamed table CHECKs must survive DDL reparse after reopen",
+    );
+  });
+
   it("issues a CHECK_CONSTRAINTS metadata query during reverse engineering", async () => {
     const checkRow = {
       CONSTRAINT_CATALOG: "ANALYTICS",
@@ -532,6 +560,42 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
         nameOrigin: "unknown",
       },
     ]);
+  });
+
+  it("maps explicit Snowflake VARCHAR/BINARY metadata maxima without truncation", () => {
+    const metadata = checkMetadataFixture({
+      columns: [
+        metadataColumn("CHECKED", "VARCHAR_MAX", "VARCHAR", 1, {
+          character_maximum_length: 134_217_728,
+        }),
+        metadataColumn("CHECKED", "BINARY_MAX", "BINARY", 2, {
+          character_maximum_length: 67_108_864,
+        }),
+      ],
+    });
+    const project = snowflakeMetadataToCanonicalProject(metadata, {
+      name: "EXPLICIT_BOUNDS",
+    });
+
+    assert.deepEqual(
+      project.physical_model.tables[0].columns.map((column) => column.data_type),
+      [
+        {
+          family: "VARCHAR",
+          text: "VARCHAR(134217728)",
+          precision: null,
+          scale: null,
+          length: 134_217_728,
+        },
+        {
+          family: "BINARY",
+          text: "BINARY(67108864)",
+          precision: null,
+          scale: null,
+          length: 67_108_864,
+        },
+      ],
+    );
   });
 
   it("accepts current Snowflake VARCHAR/BINARY maxima and rejects one above each", () => {
