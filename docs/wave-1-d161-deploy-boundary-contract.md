@@ -1,7 +1,9 @@
 # Wave 1 Remediation Contract: D161 Deploy Boundary
 
-Date: 2026-09-04  
-Planning branch: `remediation/d161-deploy-boundary`  
+Date: 2026-09-04
+
+Planning branch: `remediation/d161-deploy-boundary`
+
 Frozen rejected source: `1a2079c2be2caadd2a159b9ae2c78228579a29cc`
 
 ## Decision
