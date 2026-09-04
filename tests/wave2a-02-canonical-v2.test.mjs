@@ -131,6 +131,230 @@ function v2Project() {
   return diagramToCanonicalProject(newDiagram());
 }
 
+function relationalDiagram() {
+  return {
+    database: "snowflake",
+    title: "ORDER_FULFILLMENT",
+    tables: [
+      {
+        id: "customers",
+        name: "CUSTOMERS",
+        x: 40,
+        y: 80,
+        namespace: {
+          id: "namespace:ANALYTICS.CORE",
+          catalog: "ANALYTICS",
+          schema: "CORE",
+        },
+        comment: "Customer master records",
+        constraintView: {
+          primaryKeyName: "PK_CUSTOMERS",
+          uniqueNames: { email: "UQ_CUSTOMERS_EMAIL" },
+        },
+        fields: [
+          {
+            id: "customer-id",
+            name: "CUSTOMER_ID",
+            type: "NUMBER",
+            size: "38,0",
+            default: "",
+            check: "",
+            primary: true,
+            unique: false,
+            notNull: true,
+            increment: false,
+            comment: "Stable customer id",
+          },
+          {
+            id: "email",
+            name: "EMAIL",
+            type: "VARCHAR",
+            size: 320,
+            default: "'unknown@example.com'",
+            check: "",
+            primary: false,
+            unique: true,
+            notNull: true,
+            increment: false,
+            comment: "Primary contact email",
+          },
+        ],
+      },
+      {
+        id: "orders",
+        name: "ORDERS",
+        x: 360,
+        y: 80,
+        namespace: {
+          id: "namespace:ANALYTICS.CORE",
+          catalog: "ANALYTICS",
+          schema: "CORE",
+        },
+        comment: "Customer order facts",
+        constraintView: { primaryKeyName: "PK_ORDERS" },
+        fields: [
+          {
+            id: "order-id",
+            name: "ORDER_ID",
+            type: "NUMBER",
+            size: "38,0",
+            default: "",
+            check: "",
+            primary: true,
+            unique: false,
+            notNull: true,
+            increment: false,
+            comment: "Stable order id",
+          },
+          {
+            id: "customer-id",
+            name: "CUSTOMER_ID",
+            type: "NUMBER",
+            size: "38,0",
+            default: "",
+            check: "",
+            primary: false,
+            unique: false,
+            notNull: true,
+            increment: false,
+            comment: "Owning customer id",
+          },
+          {
+            id: "created-at",
+            name: "CREATED_AT",
+            type: "TIMESTAMP_NTZ",
+            size: 9,
+            default: "CURRENT_TIMESTAMP",
+            check: "",
+            primary: false,
+            unique: false,
+            notNull: true,
+            increment: false,
+            comment: "Creation timestamp",
+          },
+        ],
+      },
+    ],
+    relationships: [
+      {
+        id: "orders-customers",
+        name: "FK_ORDERS_CUSTOMER",
+        startTableId: "orders",
+        startFieldId: "customer-id",
+        endTableId: "customers",
+        endFieldId: "customer-id",
+        fields: [
+          { startFieldId: "customer-id", endFieldId: "customer-id" },
+        ],
+        cardinality: "many_to_one",
+        updateConstraint: "No action",
+        deleteConstraint: "No action",
+      },
+    ],
+    transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+  };
+}
+
+function relationalProject() {
+  return diagramToCanonicalProject(relationalDiagram());
+}
+
+const editorSemanticDivergences = [
+  {
+    label: "title/model name",
+    mutate: (document) => {
+      document.title = "ORDER_FULFILLMENT_V2";
+    },
+  },
+  {
+    label: "namespace catalog",
+    mutate: (document) => {
+      document.tables[0].namespace.catalog = "REPORTING";
+    },
+  },
+  {
+    label: "namespace schema",
+    mutate: (document) => {
+      document.tables[0].namespace.schema = "ARCHIVE";
+    },
+  },
+  {
+    label: "table name/identity",
+    mutate: (document) => {
+      document.tables[0].name = "CUSTOMER_ACCOUNTS";
+    },
+  },
+  {
+    label: "column name",
+    mutate: (document) => {
+      document.tables[0].fields[1].name = "LOGIN_EMAIL";
+    },
+  },
+  {
+    label: "type",
+    mutate: (document) => {
+      document.tables[0].fields[1].type = "NUMBER";
+      document.tables[0].fields[1].size = "12,0";
+    },
+  },
+  {
+    label: "nullability",
+    mutate: (document) => {
+      document.tables[0].fields[1].notNull = false;
+    },
+  },
+  {
+    label: "default",
+    mutate: (document) => {
+      document.tables[1].fields[2].default = "CURRENT_DATE";
+    },
+  },
+  {
+    label: "column comment",
+    mutate: (document) => {
+      document.tables[0].fields[0].comment = "Customer surrogate key";
+    },
+  },
+  {
+    label: "table comment",
+    mutate: (document) => {
+      document.tables[1].comment = "Orders placed by customers";
+    },
+  },
+  {
+    label: "primary-key semantics",
+    mutate: (document) => {
+      document.tables[0].fields[0].primary = false;
+    },
+  },
+  {
+    label: "unique semantics",
+    mutate: (document) => {
+      document.tables[0].fields[1].unique = false;
+    },
+  },
+  {
+    label: "relationship name",
+    mutate: (document) => {
+      document.relationships[0].name = "FK_ORDERS_ACCOUNT";
+    },
+  },
+  {
+    label: "relationship endpoints",
+    mutate: (document) => {
+      const relationship = document.relationships[0];
+      relationship.startTableId = "customers";
+      relationship.startFieldId = "customer-id";
+      relationship.endTableId = "orders";
+      relationship.endFieldId = "customer-id";
+      relationship.fields[0] = {
+        startFieldId: "customer-id",
+        endFieldId: "customer-id",
+      };
+    },
+  },
+];
+
 function canonicalProjectWithEditorState() {
   const diagram = newDiagram();
   diagram.notes = [
@@ -211,6 +435,66 @@ function bareVectorV1Project() {
 }
 
 describe("Wave 2A canonical v2 migration scaffold", () => {
+  for (const { label, mutate } of editorSemanticDivergences) {
+    it(`rejects independently valid editor divergence: ${label}`, () => {
+      const candidate = JSON.parse(JSON.stringify(relationalProject()));
+      mutate(candidate.drawdb_document);
+      const before = JSON.stringify(candidate);
+
+      assert.doesNotThrow(
+        () => diagramToCanonicalProject(candidate.drawdb_document),
+        `${label} mutation must remain a valid editor document`,
+      );
+      assert.throws(
+        () => canonicalProjectToDiagram(candidate),
+        (error) => {
+          assert.equal(error?.code, "CANONICAL_EDITOR_SEMANTIC_MISMATCH");
+          assert.equal(
+            error?.message,
+            "drawdb_document semantics do not match authoritative physical_model",
+          );
+          return true;
+        },
+      );
+      assert.equal(
+        JSON.stringify(candidate),
+        before,
+        `${label} mismatch must not mutate the input project`,
+      );
+    });
+  }
+
+  it("migrates v1 physical state while reconciling a matching embedded editor", () => {
+    const validV2 = relationalProject();
+    const expectedPhysical = JSON.parse(
+      JSON.stringify(validV2.physical_model),
+    );
+    const legacyInput = JSON.parse(JSON.stringify(validV2));
+    legacyInput.physical_model.model_version = "1";
+    for (const table of legacyInput.physical_model.tables) {
+      delete table.check_constraints;
+      for (const column of table.columns) {
+        delete column.data_type.vector_element_type;
+        delete column.data_type.vector_dimension;
+      }
+    }
+    const inputBefore = JSON.stringify(legacyInput);
+
+    const serializedDiagram = JSON.stringify(canonicalProjectToDiagram(legacyInput));
+    assert.equal(
+      JSON.stringify(legacyInput),
+      inputBefore,
+      "opening a legacy project must not mutate its input",
+    );
+    const reopenedDiagram = JSON.parse(serializedDiagram);
+    const diagramBefore = JSON.stringify(reopenedDiagram);
+    const migrated = diagramToCanonicalProject(reopenedDiagram);
+
+    assert.equal(JSON.stringify(reopenedDiagram), diagramBefore);
+    assert.equal(migrated.physical_model.model_version, "2");
+    assert.deepEqual(migrated.physical_model, expectedPhysical);
+  });
+
   it("migrates serialized v1 non-vector state to v2 without semantic loss", () => {
     const serialized = JSON.parse(JSON.stringify(v1Project()));
     const before = JSON.stringify(serialized);
