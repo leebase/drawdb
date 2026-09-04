@@ -278,6 +278,10 @@ const LEGACY_FIELD_CHECK_ERROR_MESSAGE =
 const UNRESOLVED_VECTOR_ERROR_CODE = "UNRESOLVED_VECTOR";
 const UNRESOLVED_VECTOR_ERROR_MESSAGE =
   "VECTOR requires an INT or FLOAT element type and a positive dimension";
+const CANONICAL_EDITOR_SEMANTIC_MISMATCH_ERROR_CODE =
+  "CANONICAL_EDITOR_SEMANTIC_MISMATCH";
+const CANONICAL_EDITOR_SEMANTIC_MISMATCH_ERROR_MESSAGE =
+  "drawdb_document semantics do not match authoritative physical_model";
 
 function isPlainObject(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -1648,6 +1652,21 @@ function validatePhysicalModel(model) {
   );
 }
 
+function reconstructDrawdbPhysicalModel(document) {
+  // Route the editor representation through the ordinary diagram adapter.  Do
+  // not derive a partial/count-only projection here: the adapter's complete
+  // physical model is the value reconciled against the authoritative model.
+  const reconstructedProject = diagramToCanonicalProject(document);
+  return validatePhysicalModel(reconstructedProject.physical_model);
+}
+
+function physicalModelsMatch(authoritativeModel, editorModel) {
+  // Both values have passed exact v2 validation, so deterministic JSON
+  // equality compares every canonical semantic field (including ordered
+  // columns, key columns, relationships, and the empty CHECK scaffold).
+  return JSON.stringify(authoritativeModel) === JSON.stringify(editorModel);
+}
+
 export function canonicalProjectToDiagram(project) {
   requireObject(project, "project");
   const unexpected = Object.keys(project).filter(
@@ -1674,7 +1693,15 @@ export function canonicalProjectToDiagram(project) {
   const tableIds = new Set(model.tables.map((t) => t.id));
   const layout = parseDiagramLayout(project.diagram_layout, tableIds);
   if (project.drawdb_document !== undefined) {
-    return validateDrawdbDocument(project.drawdb_document);
+    const editorDocument = validateDrawdbDocument(project.drawdb_document);
+    const editorModel = reconstructDrawdbPhysicalModel(editorDocument);
+    if (!physicalModelsMatch(model, editorModel)) {
+      failWithCode(
+        CANONICAL_EDITOR_SEMANTIC_MISMATCH_ERROR_CODE,
+        CANONICAL_EDITOR_SEMANTIC_MISMATCH_ERROR_MESSAGE,
+      );
+    }
+    return editorDocument;
   }
   const namespaceById = new Map(model.namespaces.map((ns) => [ns.id, ns]));
 

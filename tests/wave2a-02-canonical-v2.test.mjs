@@ -131,6 +131,51 @@ function v2Project() {
   return diagramToCanonicalProject(newDiagram());
 }
 
+function canonicalProjectWithEditorState() {
+  const diagram = newDiagram();
+  diagram.notes = [
+    {
+      id: "note-1",
+      x: 12,
+      y: 24,
+      title: "Events",
+      content: "Stable event identifiers",
+      color: "#f5d90a",
+      height: 120,
+      width: 240,
+      locked: true,
+    },
+  ];
+  diagram.areas = [
+    {
+      id: "area-1",
+      name: "Analytics",
+      x: 0,
+      y: 0,
+      width: 640,
+      height: 360,
+      locked: false,
+      color: "#dbeafe",
+    },
+  ];
+  diagram.types = [
+    {
+      id: "type-1",
+      name: "EVENT_ID_TYPE",
+      fields: [{ id: "type-field-1", name: "VALUE", type: "NUMBER" }],
+      comment: "Event identifier type",
+    },
+  ];
+  diagram.enums = [
+    {
+      id: "enum-1",
+      name: "EVENT_STATUS",
+      values: ["ACTIVE", "ARCHIVED"],
+    },
+  ];
+  return { diagram, project: diagramToCanonicalProject(diagram) };
+}
+
 function bareVectorV1Project() {
   const project = v1Project();
   project.physical_model.name = "V1_UNRESOLVED_VECTOR";
@@ -223,6 +268,46 @@ describe("Wave 2A canonical v2 migration scaffold", () => {
       );
     }
     assert.deepEqual(project.physical_model.tables[0].check_constraints, []);
+  });
+
+  it("reopens a canonical project while preserving editor-only arrays", () => {
+    const { diagram, project } = canonicalProjectWithEditorState();
+    const reopened = canonicalProjectToDiagram(
+      JSON.parse(JSON.stringify(project)),
+    );
+
+    assert.deepEqual(reopened.notes, diagram.notes);
+    assert.deepEqual(reopened.areas, diagram.areas);
+    assert.deepEqual(reopened.types, diagram.types);
+    assert.deepEqual(reopened.enums, diagram.enums);
+  });
+
+  it("rejects an editor document whose field name disagrees with physical_model", () => {
+    const { project } = canonicalProjectWithEditorState();
+    const mismatching = JSON.parse(JSON.stringify(project));
+    mismatching.drawdb_document.tables[0].fields[0].name = "EVENT_KEY";
+
+    assert.throws(
+      () => canonicalProjectToDiagram(mismatching),
+      (error) => {
+        assert.equal(error?.code, "CANONICAL_EDITOR_SEMANTIC_MISMATCH");
+        assert.equal(
+          error?.message,
+          "drawdb_document semantics do not match authoritative physical_model",
+        );
+        return true;
+      },
+    );
+  });
+
+  it("does not mutate mismatching project JSON while opening it", () => {
+    const { project } = canonicalProjectWithEditorState();
+    const mismatching = JSON.parse(JSON.stringify(project));
+    mismatching.drawdb_document.tables[0].fields[0].name = "EVENT_KEY";
+    const before = JSON.stringify(mismatching);
+
+    assert.throws(() => canonicalProjectToDiagram(mismatching));
+    assert.equal(JSON.stringify(mismatching), before);
   });
 
   it("keeps v2 migration and JSON serialize/reopen idempotent", () => {
