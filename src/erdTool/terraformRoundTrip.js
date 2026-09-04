@@ -2,6 +2,8 @@ import { DB } from "../data/constants.js";
 import {
   canonicalProjectToDiagram,
   isSnowflakeDefaultExpression,
+  SnowflakeCheckError,
+  getSnowflakeTableChecks,
 } from "./projectAdapter.js";
 import {
   assertSnowflakeTypeExportable,
@@ -44,6 +46,50 @@ const PROJECT_KEYS = new Set([
 
 function fail(message) {
   throw new Error(message);
+}
+
+function rejectTerraformCheck() {
+  throw new SnowflakeCheckError(
+    "SNOWFLAKE_CHECK_UNSUPPORTED",
+    "Terraform CHECK interchange is unsupported until provider support is verified. Use Snowflake DDL or canonical project export to preserve CHECK constraints.",
+  );
+}
+
+function rejectCheckModel(value) {
+  const model = value?.physical_model ?? value;
+  for (const table of model?.tables ?? []) {
+    if (
+      table.constraints?.some(
+        (constraint) => String(constraint.kind).toLowerCase() === "check",
+      ) ||
+      getSnowflakeTableChecks(table).length
+    )
+      rejectTerraformCheck();
+  }
+  for (const table of value?.drawdb_document?.tables ?? []) {
+    if (getSnowflakeTableChecks(table).length) rejectTerraformCheck();
+  }
+}
+
+function rejectCheckHcl(entries) {
+  for (const entry of entries) {
+    if (entry.kind === "block") {
+      if (
+        /^(?:check|check_constraint|check_constraints)$/i.test(entry.type) ||
+        (entry.type === "resource" && /check/i.test(entry.labels[0] ?? ""))
+      )
+        rejectTerraformCheck();
+      rejectCheckHcl(entry.body);
+    } else if (
+      /^(?:check|check_clause|check_constraint|check_constraints)$/i.test(
+        entry.name,
+      ) ||
+      (entry.name === "type" &&
+        typeof entry.value === "string" &&
+        entry.value.trim().toUpperCase() === "CHECK")
+    )
+      rejectTerraformCheck();
+  }
 }
 
 function isPlainObject(value) {
@@ -778,6 +824,7 @@ function buildConstraint(resource, tablesByResourceName, tablesByObjectKey) {
     columns,
     referenced_table_id: null,
     referenced_columns: [],
+    expression: null,
   };
   const fkBlocks = blockList(object, "foreign_key_properties");
   if (kind !== "foreign_key") {
@@ -860,6 +907,7 @@ function validateCanonicalProject(project) {
 
 export function terraformHclToCanonicalProject(input, options = {}) {
   const entries = parseHcl(input);
+  rejectCheckHcl(entries);
   const resources = collectResourceBlocks(entries);
   const index = indexResources(resources);
   const databases = buildDatabases(index);
@@ -1064,6 +1112,7 @@ function validateProjectOrModel(projectOrModel, options = {}) {
 }
 
 export function canonicalProjectToTerraformHcl(projectOrModel, options = {}) {
+  rejectCheckModel(projectOrModel);
   const model = validateProjectOrModel(projectOrModel, options);
   const databaseItems = [...new Set(model.namespaces.map((ns) => ns.catalog))]
     .sort()

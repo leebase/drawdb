@@ -8,9 +8,19 @@ import { toSqlite } from "./sqlite.js";
 import {
   diagramToCanonicalProject,
   renderCanonicalSnowflakeDDL,
+  SnowflakeCheckError,
 } from "../../erdTool/projectAdapter.js";
 
 export function exportSQL(diagram) {
+  if (
+    diagram.database !== DB.SNOWFLAKE &&
+    diagram.tables?.some((table) => table.checkConstraints?.length)
+  ) {
+    throw new SnowflakeCheckError(
+      "SNOWFLAKE_CHECK_UNSUPPORTED",
+      "This SQL dialect cannot preserve table CHECK constraints. Export as Snowflake DDL or a canonical project.",
+    );
+  }
   switch (diagram.database) {
     case DB.SQLITE:
       return toSqlite(diagram);

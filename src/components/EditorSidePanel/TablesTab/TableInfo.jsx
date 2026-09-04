@@ -20,15 +20,50 @@ import { Action, ObjectType, State, DB } from "../../../data/constants";
 import TableField from "./TableField";
 import IndexDetails from "./IndexDetails";
 import UniqueConstraintDetails from "./UniqueConstraintDetails";
+import CheckConstraintDetails, {
+  readSnowflakeTableChecks,
+} from "./CheckConstraintDetails";
 import { useTranslation } from "react-i18next";
 import { SortableList } from "../../SortableList/SortableList";
 import { nanoid } from "nanoid";
+
+function nextSnowflakeCheckName(table, checks) {
+  const occupied = new Set(
+    checks.map((check) => String(check.name).trim().toUpperCase()),
+  );
+  for (const constraint of table.constraints ?? []) {
+    if (String(constraint.kind ?? "").toLowerCase() !== "check") {
+      occupied.add(String(constraint.name ?? "").trim().toUpperCase());
+    }
+  }
+  for (const constraint of table.uniqueConstraints ?? []) {
+    occupied.add(String(constraint.name ?? "").trim().toUpperCase());
+  }
+  occupied.add(String(table.constraintView?.primaryKeyName ?? "").trim().toUpperCase());
+  for (const name of Object.values(table.constraintView?.uniqueNames ?? {})) {
+    occupied.add(String(name).trim().toUpperCase());
+  }
+
+  const tableToken =
+    String(table.name ?? "TABLE")
+      .trim()
+      .toUpperCase()
+      .replace(/[^A-Z0-9_$]/g, "_") || "TABLE";
+  const base = `CK_${tableToken}`;
+  for (let ordinal = 1; ; ordinal += 1) {
+    const suffix = `_${ordinal}`;
+    const candidate = `${base.slice(0, 255 - suffix.length)}${suffix}`;
+    if (!occupied.has(candidate)) return candidate;
+  }
+}
 
 export default function TableInfo({ data }) {
   const { tables, database } = useDiagram();
   const { t } = useTranslation();
   const [indexActiveKey, setIndexActiveKey] = useState("");
   const [uniqueActiveKey, setUniqueActiveKey] = useState("");
+  const [checkActiveKey, setCheckActiveKey] = useState("1");
+  const [draftCheck, setDraftCheck] = useState(null);
   const [commentActiveKey, setCommentActiveKey] = useState("");
   const [showComment, setShowComment] = useState(false);
   const { layout } = useLayout();
@@ -37,6 +72,27 @@ export default function TableInfo({ data }) {
   const { setSaveState } = useSaveState();
   const [editField, setEditField] = useState({});
   const initialColorRef = useRef(data.color);
+  const snowflakeCheckState =
+    database === DB.SNOWFLAKE
+      ? readSnowflakeTableChecks(data)
+      : { checks: [], error: null };
+  const { checks: snowflakeChecks, error: snowflakeCheckError } =
+    snowflakeCheckState;
+  // A malformed CHECK representation remains present in the source table and
+  // must fail closed for structural actions.  Keep the panel visible with the
+  // typed error rather than treating the table as CHECK-free.
+  const hasSnowflakeChecks =
+    snowflakeChecks.length > 0 || Boolean(snowflakeCheckError);
+
+  const addCheckConstraint = () => {
+    if (layout.readOnly || draftCheck) return;
+    setDraftCheck({
+      id: nanoid(),
+      name: nextSnowflakeCheckName(data, snowflakeChecks),
+      expression: "",
+    });
+    setCheckActiveKey("1");
+  };
 
   const handleColorPick = (color) => {
     setUndoStack((prev) => {
@@ -157,6 +213,12 @@ export default function TableInfo({ data }) {
           placeholder={t("name")}
           className="ms-2"
           readonly={layout.readOnly}
+          disabled={hasSnowflakeChecks}
+          title={
+            hasSnowflakeChecks
+              ? "Remove or revise CHECK constraints before renaming this table"
+              : t("name")
+          }
           onChange={(value) => updateTable(data.id, { name: value })}
           onFocus={(e) => setEditField({ name: e.target.value })}
           onBlur={(e) => {
@@ -302,6 +364,54 @@ export default function TableInfo({ data }) {
         </Card>
       )}
 
+      {database === DB.SNOWFLAKE && (hasSnowflakeChecks || draftCheck) && (
+        <Card
+          bodyStyle={{ padding: "8px" }}
+          style={{ marginTop: "12px", marginBottom: "12px" }}
+          headerLine={false}
+          data-testid="snowflake-check-constraints"
+        >
+          <Collapse
+            activeKey={checkActiveKey}
+            keepDOM
+            onChange={(itemKey) => setCheckActiveKey(itemKey)}
+            accordion
+          >
+            <Collapse.Panel header="CHECK constraints" itemKey="1">
+              {snowflakeCheckError ? (
+                <div
+                  className="text-xs text-red-600"
+                  role="alert"
+                  data-testid="snowflake-check-error"
+                >
+                  CHECK constraints could not be validated: {snowflakeCheckError.message}
+                </div>
+              ) : (
+                <>
+                  {snowflakeChecks.map((check) => (
+                    <CheckConstraintDetails
+                      key={`check_constraint_${check.id}`}
+                      data={check}
+                      tid={data.id}
+                    />
+                  ))}
+                  {draftCheck && (
+                    <CheckConstraintDetails
+                      key={`check_constraint_draft_${draftCheck.id}`}
+                      data={draftCheck}
+                      tid={data.id}
+                      isDraft
+                      onCanceled={() => setDraftCheck(null)}
+                      onCommitted={() => setDraftCheck(null)}
+                    />
+                  )}
+                </>
+              )}
+            </Collapse.Panel>
+          </Collapse>
+        </Card>
+      )}
+
       {((data.comment && data.comment.trim() !== "") || showComment) && (
         <Card
           bodyStyle={{ padding: "4px" }}
@@ -372,6 +482,11 @@ export default function TableInfo({ data }) {
                 <Dropdown.Item onClick={addUniqueConstraint}>
                   {t("add_unique_constraint")}
                 </Dropdown.Item>
+                {database === DB.SNOWFLAKE && (
+                  <Dropdown.Item onClick={addCheckConstraint}>
+                    Add CHECK constraint
+                  </Dropdown.Item>
+                )}
                 <Dropdown.Item onClick={addIndex}>
                   {t("add_index")}
                 </Dropdown.Item>
@@ -425,10 +540,27 @@ export default function TableInfo({ data }) {
           >
             {t("add_field")}
           </Button>
+          {database === DB.SNOWFLAKE && (
+            <Button
+              disabled={
+                layout.readOnly || Boolean(draftCheck) || Boolean(snowflakeCheckError)
+              }
+              onClick={addCheckConstraint}
+              data-testid="snowflake-add-check-constraint"
+              title={draftCheck ? "Finish the current CHECK draft first" : "Add CHECK constraint"}
+            >
+              Add CHECK
+            </Button>
+          )}
           <Button
             type="danger"
-            disabled={layout.readOnly}
+            disabled={layout.readOnly || hasSnowflakeChecks}
             icon={<IconDeleteStroked />}
+            title={
+              hasSnowflakeChecks
+                ? "Remove or revise CHECK constraints before deleting this table"
+                : t("delete")
+            }
             onClick={() => deleteTable(data.id)}
           />
         </div>

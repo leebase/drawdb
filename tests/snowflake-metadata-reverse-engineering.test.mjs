@@ -421,22 +421,6 @@ function checkConstraintsRow(catalog, schema, table, name, expression) {
 
 function mockedCheckMetadata() {
   const metadata = structuredClone(mockedSnowflakeMetadata());
-  metadata.tableConstraints.push(
-    checkConstraint(
-      "ANALYTICS",
-      "CORE",
-      "CUSTOMER",
-      "CK_CUSTOMER_EMAIL",
-      "EMAIL IS NOT NULL AND POSITION('@' IN EMAIL) > 1",
-    ),
-    checkConstraint(
-      "ANALYTICS",
-      "MART",
-      "ORDER_FACT",
-      "CK_ORDER_AMOUNT",
-      "  ((ORDER_AMOUNT >= 0) AND (TAX_RATE >= 0 OR TAX_RATE IS NULL))  ",
-    ),
-  );
   metadata.checkConstraints = [
     checkConstraintsRow(
       "ANALYTICS",
@@ -1034,12 +1018,105 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
     );
   });
 
-  it("fails closed with typed errors for missing, duplicate, orphan, malformed, conflicting, and unsupported CHECK metadata", async () => {
+  it("joins independent CHECK rows by complete table identity", async () => {
     const { snowflakeMetadataToCanonicalProject } =
       await loadSnowflakeMetadataMapper();
-    const assertTyped = (metadata, code, label) => {
+    const metadata = structuredClone(mockedSnowflakeMetadata());
+    const sharedTables = [
+      ["ANALYTICS", "MART", "CUSTOMER", "MART_CUSTOMER_ID > 0"],
+      ["OPS", "SECURITY", "CUSTOMER", "OPS_CUSTOMER_ID > 0"],
+    ];
+    metadata.checkConstraints = [];
+    for (const [catalog, schema, table, expression] of sharedTables) {
+      metadata.tables.push({
+        table_catalog: catalog,
+        table_schema: schema,
+        table_name: table,
+        table_type: "BASE TABLE",
+      });
+      metadata.columns.push(column(catalog, schema, table, "ID", 1, "NUMBER"));
+      metadata.checkConstraints.push(
+        checkConstraintsRow(catalog, schema, table, "CK_SHARED", expression),
+      );
+    }
+    metadata.checkConstraints.unshift(
+      checkConstraintsRow(
+        "ANALYTICS",
+        "CORE",
+        "CUSTOMER",
+        "CK_SHARED",
+        "CUSTOMER_ID > 0",
+      ),
+    );
+
+    const project = snowflakeMetadataToCanonicalProject(metadata, {
+      name: "check-identity",
+    });
+    assert.deepEqual(
+      project.physical_model.tables
+        .flatMap((table) => table.constraints)
+        .filter((constraint) => constraint.kind === "check")
+        .map(({ id, expression }) => ({ id, expression })),
+      [
+        {
+          id: "constraint:ANALYTICS.CORE.CUSTOMER.CK_SHARED",
+          expression: "CUSTOMER_ID > 0",
+        },
+        {
+          id: "constraint:ANALYTICS.MART.CUSTOMER.CK_SHARED",
+          expression: "MART_CUSTOMER_ID > 0",
+        },
+        {
+          id: "constraint:OPS.SECURITY.CUSTOMER.CK_SHARED",
+          expression: "OPS_CUSTOMER_ID > 0",
+        },
+      ],
+    );
+  });
+
+  it("accepts optional legacy CHECK declarations when independently matched", async () => {
+    const { snowflakeMetadataToCanonicalProject } =
+      await loadSnowflakeMetadataMapper();
+    const metadata = mockedCheckMetadata();
+    metadata.tableConstraints.push(
+      checkConstraint(
+        "ANALYTICS",
+        "CORE",
+        "CUSTOMER",
+        "CK_CUSTOMER_EMAIL",
+        "EMAIL IS NOT NULL AND POSITION('@' IN EMAIL) > 1",
+      ),
+      checkConstraint(
+        "ANALYTICS",
+        "MART",
+        "ORDER_FACT",
+        "CK_ORDER_AMOUNT",
+        "  ((ORDER_AMOUNT >= 0) AND (TAX_RATE >= 0 OR TAX_RATE IS NULL))  ",
+      ),
+    );
+    const project = snowflakeMetadataToCanonicalProject(metadata, {
+      name: "legacy-check-declarations",
+    });
+    assert.equal(
+      project.physical_model.tables
+        .flatMap((table) => table.constraints)
+        .filter((constraint) => constraint.kind === "check").length,
+      2,
+    );
+  });
+
+  it("fails closed with typed errors for missing, duplicate, orphan, malformed, conflicting, and unsupported CHECK metadata", async () => {
+    const {
+      indexSnowflakeCheckMetadata,
+      snowflakeMetadataToCanonicalProject,
+    } =
+      await loadSnowflakeMetadataMapper();
+    const assertTyped = (metadata, code, label, selectedTableKeys = null) => {
       assert.throws(
-        () => snowflakeMetadataToCanonicalProject(metadata, { name: label }),
+        () =>
+          selectedTableKeys
+            ? indexSnowflakeCheckMetadata(metadata, { selectedTableKeys })
+            : snowflakeMetadataToCanonicalProject(metadata, { name: label }),
         (error) =>
           error instanceof SnowflakeCheckError &&
           error.code === code &&
@@ -1050,9 +1127,9 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
 
     const cases = [
       [
-        "missing",
-        (metadata) => metadata.checkConstraints.shift(),
-        "SNOWFLAKE_CHECK_LOSS",
+        "missing-clause",
+        (metadata) => { metadata.checkConstraints[0].check_clause = undefined; },
+        "SNOWFLAKE_CHECK_INVALID",
       ],
       [
         "duplicate",
@@ -1072,6 +1149,12 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
             ),
           ),
         "SNOWFLAKE_CHECK_LOSS",
+      ],
+      [
+        "unselected",
+        (metadata) => metadata,
+        "SNOWFLAKE_CHECK_LOSS",
+        new Set(["ANALYTICS\0CORE\0CUSTOMER"]),
       ],
       [
         "malformed",
@@ -1096,15 +1179,6 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
             table_name: "VIEW_WITH_CHECK",
             table_type: "VIEW",
           });
-          metadata.tableConstraints.push(
-            checkConstraint(
-              "ANALYTICS",
-              "CORE",
-              "VIEW_WITH_CHECK",
-              "CK_VIEW",
-              "1 = 1",
-            ),
-          );
           metadata.checkConstraints.push(
             checkConstraintsRow(
               "ANALYTICS",
@@ -1117,11 +1191,39 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
         },
         "SNOWFLAKE_CHECK_UNSUPPORTED",
       ],
+      [
+        "unmatched-legacy-declaration",
+        (metadata) =>
+          metadata.tableConstraints.push(
+            checkConstraint(
+              "ANALYTICS",
+              "CORE",
+              "CUSTOMER",
+              "CK_UNMATCHED",
+              "1 = 1",
+            ),
+          ),
+        "SNOWFLAKE_CHECK_LOSS",
+      ],
+      [
+        "conflicting-legacy-declaration",
+        (metadata) =>
+          metadata.tableConstraints.push(
+            checkConstraint(
+              "ANALYTICS",
+              "CORE",
+              "CUSTOMER",
+              "CK_CUSTOMER_EMAIL",
+              "EMAIL <> ''",
+            ),
+          ),
+        "SNOWFLAKE_CHECK_INVALID",
+      ],
     ];
-    for (const [label, mutate, code] of cases) {
+    for (const [label, mutate, code, selectedTableKeys] of cases) {
       const metadata = mockedCheckMetadata();
       mutate(metadata);
-      assertTyped(metadata, code, label);
+      assertTyped(metadata, code, label, selectedTableKeys);
     }
   });
 

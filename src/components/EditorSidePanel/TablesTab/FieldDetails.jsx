@@ -14,6 +14,7 @@ import { useTranslation } from "react-i18next";
 import { databases } from "../../../data/databases";
 import { resolveType } from "../../../utils/customTypes";
 import { canonicalizeSnowflakeTypeFromField } from "../../../erdTool/snowflakeTypeContract";
+import { readSnowflakeTableChecks } from "./CheckConstraintDetails";
 
 function vectorSizeIsValid(size) {
   if (size === undefined || size === null || String(size).trim() === "") {
@@ -40,6 +41,13 @@ export default function FieldDetails({ data, tid }) {
   const { updateField, deleteField } = useDiagram();
   const [editField, setEditField] = useState({});
   const table = useMemo(() => tables.find((t) => t.id === tid), [tables, tid]);
+  const checkState = useMemo(
+    () => database === DB.SNOWFLAKE
+      ? readSnowflakeTableChecks(table)
+      : { checks: [], error: null },
+    [database, table],
+  );
+  const blockTypeEdit = checkState.checks.length > 0 || Boolean(checkState.error);
 
   return (
     <div>
@@ -127,9 +135,12 @@ export default function FieldDetails({ data, tid }) {
             value={data.size ?? ""}
             validateStatus={vectorSizeIsValid(data.size) ? "default" : "error"}
             readonly={layout.readOnly}
+            disabled={blockTypeEdit}
+            title={blockTypeEdit ? "Remove or revise CHECK constraints before changing column size" : undefined}
             onChange={(value) => updateField(tid, data.id, { size: value })}
             onFocus={(e) => setEditField({ size: e.target.value })}
             onBlur={(e) => {
+              if (blockTypeEdit) return;
               if (e.target.value === editField.size) return;
               setUndoStack((prev) => [
                 ...prev,
@@ -168,9 +179,12 @@ export default function FieldDetails({ data, tid }) {
             }
             value={data.size}
             readonly={layout.readOnly}
+            disabled={blockTypeEdit}
+            title={blockTypeEdit ? "Remove or revise CHECK constraints before changing column size" : undefined}
             onChange={(value) => updateField(tid, data.id, { size: value })}
             onFocus={(e) => setEditField({ size: e.target.value })}
             onBlur={(e) => {
+              if (blockTypeEdit) return;
               if (e.target.value === editField.size) return;
               setUndoStack((prev) => [
                 ...prev,
@@ -206,9 +220,12 @@ export default function FieldDetails({ data, tid }) {
             }
             readonly={layout.readOnly}
             value={data.size}
+            disabled={blockTypeEdit}
+            title={blockTypeEdit ? "Remove or revise CHECK constraints before changing column size" : undefined}
             onChange={(value) => updateField(tid, data.id, { size: value })}
             onFocus={(e) => setEditField({ size: e.target.value })}
             onBlur={(e) => {
+              if (blockTypeEdit) return;
               if (e.target.value === editField.size) return;
               setUndoStack((prev) => [
                 ...prev,

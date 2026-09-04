@@ -1,6 +1,10 @@
 import { dbToTypes } from "../data/datatypes.js";
 import { Cardinality, DB, defaultBlue } from "../data/constants.js";
 import { canonicalizeSnowflakeType } from "./snowflakeTypeContract.js";
+import {
+  SnowflakeCheckError,
+  getSnowflakeTableChecks,
+} from "./projectAdapter.js";
 
 const MAX_TABLES = 200;
 const MAX_COLUMNS_PER_TABLE = 300;
@@ -284,7 +288,23 @@ function typeText(field) {
   return size ? `${family}(${size.replace(/\s+/g, "")})` : family;
 }
 
+function checksForLogicalBoundary(table, database) {
+  // Other dialects retain their existing field.check behavior. The new
+  // table-level CHECK transport must still never be silently projected away.
+  return getSnowflakeTableChecks(
+    database === DB.SNOWFLAKE ? table : { ...table, fields: [] },
+  );
+}
+
 export function diagramToLogicalModel(diagram) {
+  for (const table of diagram.tables ?? []) {
+    if (checksForLogicalBoundary(table, diagram.database).length) {
+      throw new SnowflakeCheckError(
+        "SNOWFLAKE_CHECK_UNSUPPORTED",
+        `Table ${table.name} has CHECK constraints. The logical proposal format cannot represent opaque CHECK predicates; edit this table directly.`,
+      );
+    }
+  }
   const value = {
     summary: "Current diagram",
     tables: (diagram.tables ?? []).map((table) => ({
@@ -434,6 +454,34 @@ function defaultNamespace(tables) {
 export function applyLogicalModel(diagram, proposedValue, options = {}) {
   const database = diagram.database;
   const proposal = validateLogicalModel(proposedValue, database);
+  // Validate the complete proposal before allocating ids or building output.
+  // Opaque predicates provide no dependable dependency list, so every existing
+  // column in a CHECK-bearing table must retain its identity, name, and type.
+  for (const table of diagram.tables ?? []) {
+    if (!checksForLogicalBoundary(table, database).length) continue;
+    const next = proposal.tables.find(
+      (candidate) => candidate.key === String(table.id),
+    );
+    const structuralError = () => {
+      throw new SnowflakeCheckError(
+        "SNOWFLAKE_CHECK_STRUCTURAL_EDIT",
+        `Table ${table.name} has opaque CHECK constraints. Remove or revise them explicitly before renaming/removing the table or renaming/removing/changing the type of its columns.`,
+      );
+    };
+    if (!next || next.name !== table.name) structuralError();
+    for (const field of table.fields ?? []) {
+      const column = next.columns.find(
+        (candidate) => candidate.key === String(field.id),
+      );
+      if (
+        !column ||
+        column.name !== field.name ||
+        column.type !==
+          supportedType(typeText(field), database, `field ${field.name}`)
+      )
+        structuralError();
+    }
+  }
   const idFactory =
     options.idFactory ??
     (() => {

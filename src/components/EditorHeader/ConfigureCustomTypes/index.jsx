@@ -11,6 +11,7 @@ import {
   resolveType,
 } from "../../../utils/customTypes";
 import { useDiagram } from "../../../hooks";
+import { getSnowflakeTableChecks, SnowflakeCheckError } from "../../../erdTool/projectAdapter.js";
 
 const dbFilterOptions = [
   { label: "All", value: "" },
@@ -50,7 +51,7 @@ function arrayToStored(arr) {
 
 export default function ConfigureCustomTypes({ open, onClose }) {
   const { t } = useTranslation();
-  const { setTables, database } = useDiagram();
+  const { tables, setTables, database } = useDiagram();
   const [customTypes, setCustomTypes] = useState([]);
   const [filterDb, setFilterDb] = useState("");
   const savedTypesRef = useRef([]);
@@ -102,6 +103,29 @@ export default function ConfigureCustomTypes({ open, onClose }) {
         if (!wasRenamed && (!newStored[db] || !newStored[db][name])) {
           deleted.add(name);
         }
+      }
+    }
+
+    // This legacy bulk-edit surface uses setTables directly. Preflight before
+    // changing either persistent custom types or diagram state, because an
+    // opaque CHECK cannot safely survive an implicit field-type rewrite.
+    if (database === DB.SNOWFLAKE) {
+      try {
+        for (const table of tables) {
+          const affected = table.fields.some((field) => {
+            const upper = field.type.toUpperCase();
+            return deleted.has(upper) || renames.some((rename) => rename.oldName === upper);
+          });
+          if (affected && getSnowflakeTableChecks(table).length) {
+            throw new SnowflakeCheckError(
+              "SNOWFLAKE_CHECK_STRUCTURAL_EDIT",
+              `Custom-type changes would rewrite columns on CHECK-bearing table ${table.name}. Remove or revise its CHECK constraints explicitly first.`,
+            );
+          }
+        }
+      } catch (error) {
+        Toast.error(error.message);
+        return;
       }
     }
 

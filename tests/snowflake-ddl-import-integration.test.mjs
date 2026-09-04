@@ -208,6 +208,31 @@ describe("SS-008 Snowflake DDL import integration", () => {
     assert.equal(fieldByName(tableByName(diagram, "EVENTS"), "AT").size, 3);
   });
 
+  it("preserves column, table, and ALTER CHECK predicates through normal import", () => {
+    const ddl = [
+      "CREATE TABLE ANALYTICS.CORE.EVENTS (",
+      "  AMOUNT NUMBER CONSTRAINT CK_AMOUNT CHECK (AMOUNT >= 0),",
+      "  NOTE VARCHAR CHECK (NOTE <> 'a,b; c'),",
+      "  CONSTRAINT CK_RANGE CHECK ((AMOUNT > 0) AND (AMOUNT < 100))",
+      ");",
+      "ALTER TABLE ANALYTICS.CORE.EVENTS ADD CONSTRAINT CK_ALTER CHECK (AMOUNT <> 7);",
+    ].join("\n");
+    const diagram = importSQL(ddl, DB.SNOWFLAKE, DB.SNOWFLAKE);
+    const table = tableByName(diagram, "EVENTS");
+
+    assert.deepEqual(
+      table.checkConstraints.map(({ name, expression }) => ({ name, expression })),
+      [
+        { name: "CK_AMOUNT", expression: "AMOUNT >= 0" },
+        { name: "CK_RANGE", expression: "(AMOUNT > 0) AND (AMOUNT < 100)" },
+        { name: "CK_EVENTS_2", expression: "NOTE <> 'a,b; c'" },
+        { name: "CK_ALTER", expression: "AMOUNT <> 7" },
+      ].sort((left, right) => left.name.localeCompare(right.name)),
+    );
+    assert.equal(fieldByName(table, "AMOUNT").check, "");
+    assert.equal(fieldByName(table, "NOTE").check, "");
+  });
+
   it("reports unsupported or malformed Snowflake DDL without crashing", () => {
     for (const ddl of [
       'CREATE TABLE ANALYTICS.CORE."Customer" (ID NUMBER(38, 0));',

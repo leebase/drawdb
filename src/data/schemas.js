@@ -70,6 +70,21 @@ export const tableSchema = {
         required: ["name", "fields"],
       },
     },
+    // Snowflake CHECK constraints are table-level semantic objects.  Keep the
+    // property optional so v1 documents (which predate table checks) remain
+    // valid, but validate every object once it is present.
+    checkConstraints: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          id: { type: ["integer", "string"] },
+          name: { type: "string", minLength: 1 },
+          expression: { type: "string", minLength: 1 },
+        },
+        required: ["id", "name", "expression"],
+      },
+    },
     color: { type: "string", pattern: "^#[0-9a-fA-F]{6}$" },
     inherits: {
       type: "array",

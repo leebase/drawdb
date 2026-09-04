@@ -11,6 +11,7 @@ import {
   parseSnowflakeDDLToCanonicalProject,
   parseSnowflakeDDLToDiagram,
   renderCanonicalSnowflakeDDL,
+  SnowflakeCheckError,
 } from "../src/erdTool/projectAdapter.js";
 
 const repositoryRoot = path.resolve(
@@ -468,6 +469,24 @@ describe("SS-005 Snowflake DDL export", () => {
     assert.match(ddl, /CREATE TABLE IF NOT EXISTS "users"/);
     assert.match(ddl, /"id" INTEGER NOT NULL/);
     assert.match(ddl, /PRIMARY KEY\("id"\)/);
+  });
+
+  it("rejects non-Snowflake export when table CHECK data would be omitted", () => {
+    const diagram = sqliteRegressionFixture();
+    diagram.tables[0].checkConstraints = [
+      { id: "check-users-id", name: "CK_USERS_ID", expression: "id > 0" },
+    ];
+
+    assert.throws(
+      () => exportSQL(diagram),
+      (error) => {
+        assert.ok(error instanceof SnowflakeCheckError);
+        assert.equal(error.name, "SnowflakeCheckError");
+        assert.equal(error.code, "SNOWFLAKE_CHECK_UNSUPPORTED");
+        assert.match(error.message, /SNOWFLAKE_CHECK_UNSUPPORTED/);
+        return true;
+      },
+    );
   });
 
   it("imports generated Snowflake DDL into the canonical model and renders it deterministically", () => {

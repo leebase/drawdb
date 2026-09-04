@@ -6,7 +6,11 @@ import {
   parseSnowflakeDDLToCanonicalProject,
   renderCanonicalSnowflakeDDL,
   renderCanonicalSnowflakeStatements,
+  getSnowflakeTableChecks,
+  SnowflakeCheckError,
+  SNOWFLAKE_CHECK_ERROR_CODES,
   toSnowflakeIdentifier,
+  validateSnowflakeCheckExpression,
 } from "./projectAdapter.js";
 import {
   assertSnowflakeTypeExportable,
@@ -3098,6 +3102,381 @@ describe("Snowflake type contract", () => {
     assert.throws(
       () => renderCanonicalSnowflakeDDL(project),
       /text must equal its canonical value/i,
+    );
+  });
+});
+
+describe("Snowflake CHECK preservation", () => {
+  function assertCheckError(action, code) {
+    assert.throws(action, (error) => {
+      assert.ok(error instanceof SnowflakeCheckError);
+      assert.equal(error.name, "SnowflakeCheckError");
+      assert.equal(error.code, code);
+      assert.match(error.message, new RegExp(code));
+      return true;
+    });
+  }
+
+  it("validates opaque expressions lexically without rewriting internal text", () => {
+    const expression =
+      "((amount >= 0) AND (note = 'a,b; c')) /* keep ; and nesting */";
+    assert.equal(
+      validateSnowflakeCheckExpression(` \t${expression}\n`),
+      expression,
+    );
+    assert.equal(
+      validateSnowflakeCheckExpression("amount > 0 -- semicolon;\n"),
+      "amount > 0 -- semicolon;",
+    );
+    assertCheckError(
+      () => validateSnowflakeCheckExpression("amount > 0; SELECT 1"),
+      SNOWFLAKE_CHECK_ERROR_CODES.UNSUPPORTED,
+    );
+    assertCheckError(
+      () => validateSnowflakeCheckExpression("amount > 0 /* unterminated"),
+      SNOWFLAKE_CHECK_ERROR_CODES.INVALID,
+    );
+    for (const unsupported of [
+      "value = `quoted`",
+      "value = [quoted]",
+      "value = $$quoted$$",
+    ]) {
+      assertCheckError(
+        () => validateSnowflakeCheckExpression(unsupported),
+        SNOWFLAKE_CHECK_ERROR_CODES.UNSUPPORTED,
+      );
+    }
+  });
+
+  it("imports column, table, and ALTER CHECK forms with exact predicates", () => {
+    const expression = "amount >= 0 AND note = 'a \"b\" ] ` c;'";
+    const ddl = [
+      "CREATE TABLE ANALYTICS.CORE.EVENTS (",
+      "  amount NUMBER CONSTRAINT CK_AMOUNT CHECK (amount >= 0),",
+      `  note VARCHAR CHECK (${expression}),`,
+      "  CONSTRAINT CK_EVENT_RANGE CHECK ((amount > 0) AND (amount < 100)),",
+      "  CHECK (amount <> 7)",
+      ");",
+      "ALTER TABLE ANALYTICS.CORE.EVENTS ADD CONSTRAINT CK_ALTER CHECK (amount <> 8 /* ; ) */);",
+      "ALTER TABLE ANALYTICS.CORE.EVENTS ADD CHECK (amount <> 9);",
+    ].join("\n");
+
+    const project = parseSnowflakeDDLToCanonicalProject(ddl);
+    const table = project.physical_model.tables[0];
+    const checks = table.constraints.filter((constraint) => constraint.kind === "check");
+    assert.equal(checks.length, 6);
+    assert.equal(
+      checks.find((check) => check.name === "CK_AMOUNT").expression,
+      "amount >= 0",
+    );
+    assert.equal(
+      checks.find((check) => check.name === "CK_EVENT_RANGE").expression,
+      "(amount > 0) AND (amount < 100)",
+    );
+    assert.equal(
+      checks.find((check) => check.expression === expression).name,
+      "CK_EVENTS_2",
+    );
+    assert.equal(
+      checks.find((check) => check.expression.includes("amount <> 8")).name,
+      "CK_ALTER",
+    );
+    const rendered = renderCanonicalSnowflakeDDL(project);
+    assert.match(rendered, /CONSTRAINT CK_AMOUNT CHECK \(amount >= 0\)/);
+    assert.match(rendered, /CONSTRAINT CK_ALTER CHECK \(amount <> 8 \/\* ; \) \*\/\)/);
+    assert.equal(rendered.includes("CHECK (amount >= 0) NOT ENFORCED"), false);
+    assert.equal(
+      rendered,
+      renderCanonicalSnowflakeDDL(parseSnowflakeDDLToCanonicalProject(rendered)),
+    );
+  });
+
+  it("reserves explicit names before deterministic unnamed CHECK allocation", () => {
+    const project = parseSnowflakeDDLToCanonicalProject(
+      "CREATE TABLE ANALYTICS.CORE.EVENTS (AMOUNT NUMBER, CHECK (AMOUNT > 0), CONSTRAINT CK_EVENTS_1 CHECK (AMOUNT < 100), CHECK (AMOUNT <> 50));",
+    );
+    const checks = project.physical_model.tables[0].constraints.filter(
+      (constraint) => constraint.kind === "check",
+    );
+    assert.deepEqual(
+      checks.map((check) => check.name).sort(),
+      ["CK_EVENTS_1", "CK_EVENTS_1_2", "CK_EVENTS_3"],
+    );
+    assert.equal(new Set(checks.map((check) => check.name)).size, 3);
+    assertCheckError(
+      () =>
+        parseSnowflakeDDLToCanonicalProject(
+          "CREATE TABLE ANALYTICS.CORE.EVENTS (AMOUNT NUMBER, CONSTRAINT CK_EVENTS_1 CHECK (AMOUNT > 0), CONSTRAINT CK_EVENTS_1 CHECK (AMOUNT < 100));",
+        ),
+      SNOWFLAKE_CHECK_ERROR_CODES.INVALID,
+    );
+  });
+
+  it("reserves later ALTER names before generating CREATE and ALTER names", () => {
+    for (const initialCheck of ["", ", CHECK (AMOUNT <> 50)"]) {
+      const project = parseSnowflakeDDLToCanonicalProject([
+        `CREATE TABLE ANALYTICS.CORE.EVENTS (AMOUNT NUMBER${initialCheck});`,
+        "ALTER TABLE ANALYTICS.CORE.EVENTS ADD CHECK (AMOUNT > 0);",
+        "ALTER TABLE ANALYTICS.CORE.EVENTS ADD CONSTRAINT CK_EVENTS_1 CHECK (AMOUNT < 100);",
+      ].join("\n"));
+      const checks = project.physical_model.tables[0].constraints;
+      assert.equal(new Set(checks.map((check) => check.name)).size, checks.length);
+      assert.equal(checks.find((check) => check.name === "CK_EVENTS_1").expression, "AMOUNT < 100");
+      assert.ok(checks.some((check) => check.expression === "AMOUNT > 0"));
+      assert.deepEqual(parseSnowflakeDDLToCanonicalProject(renderCanonicalSnowflakeDDL(project)).physical_model.tables[0].constraints, checks);
+    }
+  });
+
+  it("keeps renderer delimiters outside trailing CHECK line comments", () => {
+    const project = parseSnowflakeDDLToCanonicalProject(
+      "CREATE TABLE ANALYTICS.CORE.EVENTS (AMOUNT NUMBER, CONSTRAINT CK_A CHECK (AMOUNT > 0 -- keep this comment\n), CONSTRAINT CK_B CHECK (AMOUNT < 100));",
+    );
+    const expression = "AMOUNT > 0 -- keep this comment";
+    assert.equal(project.physical_model.tables[0].constraints[0].expression, expression);
+    for (const rendered of [renderCanonicalSnowflakeDDL(project), renderCanonicalSnowflakeStatements(project).join(";\n")]) {
+      assert.ok(rendered.includes(`CHECK (${expression}\n)`));
+    }
+    const reopened = parseSnowflakeDDLToCanonicalProject(renderCanonicalSnowflakeDDL(project));
+    assert.deepEqual(reopened.physical_model.tables[0].constraints, project.physical_model.tables[0].constraints);
+  });
+
+  it("round-trips canonical checks and keeps non-CHECK expression null", () => {
+    const diagram = {
+      database: "snowflake",
+      title: "check model",
+      tables: [
+        {
+          id: "events",
+          name: "events",
+          x: 15,
+          y: 25,
+          namespace: {
+            id: "unused",
+            catalog: "analytics",
+            schema: "core",
+          },
+          fields: [
+            {
+              id: "amount",
+              name: "amount",
+              type: "NUMBER",
+              size: "12,2",
+              default: "",
+              check: "",
+              primary: true,
+              unique: false,
+              notNull: true,
+              increment: false,
+              comment: "",
+            },
+          ],
+          checkConstraints: [
+            {
+              id: "raw-check-id",
+              name: "ck_amount",
+              expression: " amount >= 0 ",
+            },
+          ],
+        },
+      ],
+      relationships: [],
+      notes: [],
+      areas: [],
+      types: [],
+      enums: [],
+      transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+    };
+    const project = diagramToCanonicalProject(diagram);
+    const table = project.physical_model.tables[0];
+    const primary = table.constraints.find((constraint) => constraint.kind === "primary_key");
+    const check = table.constraints.find((constraint) => constraint.kind === "check");
+    assert.equal(primary.expression, null);
+    assert.deepEqual(
+      { name: check.name, expression: check.expression, columns: check.columns },
+      { name: "CK_AMOUNT", expression: "amount >= 0", columns: [] },
+    );
+    const reopened = canonicalProjectToDiagram(project);
+    assert.deepEqual(reopened.tables[0].checkConstraints, [
+      {
+        id: check.id,
+        name: "CK_AMOUNT",
+        expression: "amount >= 0",
+      },
+    ]);
+    const savedAgain = diagramToCanonicalProject(reopened);
+    assert.deepEqual(
+      savedAgain.physical_model.tables[0].constraints,
+      table.constraints,
+    );
+  });
+
+  it("migrates v1 legacy field.check once and deduplicates matching representations", () => {
+    const legacyDiagram = canonicalProjectToDiagram(twoTableProject());
+    legacyDiagram.database = "snowflake";
+    legacyDiagram.notes = [];
+    legacyDiagram.areas = [];
+    legacyDiagram.types = [];
+    legacyDiagram.enums = [];
+    legacyDiagram.tables[0].fields[0].check = " CUSTOMER_ID > 0 ";
+    const diagram = canonicalProjectToDiagram(
+      twoTableProject({ drawdb_document: legacyDiagram }),
+    );
+    const customer = diagram.tables.find((table) => table.name === "CUSTOMER");
+    assert.deepEqual(customer.checkConstraints, [
+      {
+        id: "constraint:ANALYTICS.CORE.CUSTOMER.CK_CUSTOMER_1",
+        name: "CK_CUSTOMER_1",
+        expression: "CUSTOMER_ID > 0",
+      },
+    ]);
+    assert.equal(customer.fields[0].check, "");
+
+    const checks = getSnowflakeTableChecks({
+      id: "table:ANALYTICS.CORE.CUSTOMER",
+      name: "CUSTOMER",
+      fields: [{ check: "CUSTOMER_ID > 0" }],
+      checkConstraints: [
+        {
+          id: "explicit",
+          name: "CK_CUSTOMER_1",
+          expression: "CUSTOMER_ID > 0",
+        },
+      ],
+    });
+    assert.equal(checks.length, 1);
+    assert.equal(checks[0].name, "CK_CUSTOMER_1");
+    assertCheckError(
+      () =>
+        getSnowflakeTableChecks({
+          name: "CUSTOMER",
+          checkConstraints: [
+            { id: "one", name: "CK_DUP", expression: "A > 0" },
+            { id: "two", name: "CK_DUP", expression: "A > 1" },
+          ],
+        }),
+      SNOWFLAKE_CHECK_ERROR_CODES.INVALID,
+    );
+  });
+
+  it("rejects v2 raw-only or conflicting checks and mixed-dialect loss", () => {
+    const diagram = {
+      database: "snowflake",
+      title: "check model",
+      tables: [
+        {
+          id: "events",
+          name: "EVENTS",
+          x: 0,
+          y: 0,
+          namespace: { id: "n", catalog: "ANALYTICS", schema: "CORE" },
+          fields: [
+            {
+              id: "amount",
+              name: "AMOUNT",
+              type: "NUMBER",
+              size: "38,0",
+              default: "",
+              check: "",
+              primary: false,
+              unique: false,
+              notNull: false,
+              increment: false,
+              comment: "",
+            },
+          ],
+          checkConstraints: [
+            { id: "check", name: "CK_AMOUNT", expression: "AMOUNT > 0" },
+          ],
+        },
+      ],
+      relationships: [],
+      notes: [],
+      areas: [],
+      types: [],
+      enums: [],
+      transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+    };
+    const project = diagramToCanonicalProject(diagram);
+    const rawOnly = structuredClone(project);
+    for (const [flag, name] of [["primary", "PK_EVENTS"], ["unique", "UQ_EVENTS_AMOUNT"]]) {
+      const collision = structuredClone(diagram);
+      collision.tables[0].fields[0][flag] = true;
+      collision.tables[0].checkConstraints[0].name = name;
+      assertCheckError(() => diagramToCanonicalProject(collision), SNOWFLAKE_CHECK_ERROR_CODES.INVALID);
+    }
+    rawOnly.drawdb_document.tables[0].checkConstraints.push({
+      id: "raw-only",
+      name: "CK_RAW_ONLY",
+      expression: "AMOUNT > 1",
+    });
+    assertCheckError(
+      () => canonicalProjectToDiagram(rawOnly),
+      SNOWFLAKE_CHECK_ERROR_CODES.LOSS,
+    );
+    const conflict = structuredClone(project);
+    conflict.drawdb_document.tables[0].checkConstraints[0].expression = "AMOUNT > 1";
+    assertCheckError(
+      () => canonicalProjectToDiagram(conflict),
+      SNOWFLAKE_CHECK_ERROR_CODES.LOSS,
+    );
+    const mixed = structuredClone(project);
+    mixed.drawdb_document.database = "sqlite";
+    assertCheckError(
+      () => canonicalProjectToDiagram(mixed),
+      SNOWFLAKE_CHECK_ERROR_CODES.LOSS,
+    );
+    const stripped = structuredClone(project);
+    stripped.physical_model.tables[0].constraints = [];
+    for (const render of [renderCanonicalSnowflakeDDL, renderCanonicalSnowflakeStatements]) {
+      for (const unsafe of [rawOnly, conflict, mixed, stripped]) {
+        assertCheckError(() => render(unsafe), SNOWFLAKE_CHECK_ERROR_CODES.LOSS);
+      }
+    }
+
+    const legacy = structuredClone(stripped);
+    legacy.project_version = "1";
+    legacy.physical_model.model_version = "1";
+    delete legacy.physical_model.tables[0].columns[0].data_type.element_type;
+    delete legacy.physical_model.tables[0].columns[0].data_type.dimension;
+    for (const render of [renderCanonicalSnowflakeDDL, renderCanonicalSnowflakeStatements]) {
+      assertCheckError(() => render(legacy), SNOWFLAKE_CHECK_ERROR_CODES.LOSS);
+    }
+    const migrated = diagramToCanonicalProject(canonicalProjectToDiagram(legacy));
+    assert.match(renderCanonicalSnowflakeDDL(migrated), /CHECK \(AMOUNT > 0\)/);
+
+    const legacyCanonical = structuredClone(project);
+    legacyCanonical.project_version = "1";
+    legacyCanonical.physical_model.model_version = "1";
+    delete legacyCanonical.physical_model.tables[0].columns[0].data_type.element_type;
+    delete legacyCanonical.physical_model.tables[0].columns[0].data_type.dimension;
+    legacyCanonical.drawdb_document.tables[0].checkConstraints = [];
+    assert.equal(canonicalProjectToDiagram(legacyCanonical).tables[0].checkConstraints[0].expression, "AMOUNT > 0");
+  });
+
+  it("blocks namespace overrides that would structurally invalidate opaque checks", () => {
+    const project = parseSnowflakeDDLToCanonicalProject(
+      "CREATE TABLE ANALYTICS.CORE.EVENTS (AMOUNT NUMBER, CHECK (AMOUNT > 0));",
+    );
+    assert.deepEqual(
+      renderCanonicalSnowflakeStatements(project, {
+        databaseOverride: "analytics",
+        schemaOverride: "core",
+      }).length > 0,
+      true,
+    );
+    assertCheckError(
+      () =>
+        renderCanonicalSnowflakeStatements(project, {
+          databaseOverride: "OTHER_DB",
+        }),
+      SNOWFLAKE_CHECK_ERROR_CODES.STRUCTURAL_EDIT,
+    );
+    assertCheckError(
+      () =>
+        renderCanonicalSnowflakeStatements(project, {
+          schemaOverride: "OTHER_SCHEMA",
+        }),
+      SNOWFLAKE_CHECK_ERROR_CODES.STRUCTURAL_EDIT,
     );
   });
 });

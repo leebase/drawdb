@@ -597,14 +597,20 @@ function requireSelectedCheckTable(
   schema,
   tableName,
 ) {
-  if (selectedTables.has(tableKey)) return;
   const kind = tableKinds.get(tableKey);
+  if (kind === undefined) {
+    checkFailure(
+      "SNOWFLAKE_CHECK_LOSS",
+      `CHECK constraint ${catalog}.${schema}.${tableName} is not attached to a selected base table`,
+    );
+  }
   if (kind !== undefined && kind !== "BASE TABLE") {
     checkFailure(
       "SNOWFLAKE_CHECK_UNSUPPORTED",
       `CHECK constraint on unsupported Snowflake table type ${kind}: ${catalog}.${schema}.${tableName}`,
     );
   }
+  if (selectedTables.has(tableKey)) return;
   checkFailure(
     "SNOWFLAKE_CHECK_LOSS",
     `CHECK constraint ${catalog}.${schema}.${tableName} is not attached to a selected base table`,
@@ -758,13 +764,24 @@ export function indexSnowflakeCheckMetadata(
       identity.schema,
       identity.tableName,
     );
+    const declarationClause = metadataValue(row, "check_clause");
+    const declarationExpression =
+      declarationClause === undefined
+        ? null
+        : validatedCheckExpression(
+            declarationClause,
+            `tableConstraints[${rowIndex}].check_clause`,
+          );
     if (declarations.has(identity.key)) {
       checkFailure(
         "SNOWFLAKE_CHECK_INVALID",
         `duplicate TABLE_CONSTRAINTS CHECK row for ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name}`,
       );
     }
-    declarations.set(identity.key, identity);
+    declarations.set(identity.key, {
+      ...identity,
+      expression: declarationExpression,
+    });
   }
 
   const checks = new Map();
@@ -806,22 +823,23 @@ export function indexSnowflakeCheckMetadata(
   }
 
   for (const identity of declarations.values()) {
-    if (!checks.has(identity.key)) {
+    const check = checks.get(identity.key);
+    if (!check) {
       checkFailure(
         "SNOWFLAKE_CHECK_LOSS",
         `CHECK constraint ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name} is missing from CHECK_CONSTRAINTS`,
       );
     }
-  }
-  for (const identity of checks.values()) {
-    if (!declarations.has(identity.key)) {
+    if (
+      identity.expression !== null &&
+      identity.expression !== check.expression
+    ) {
       checkFailure(
-        "SNOWFLAKE_CHECK_LOSS",
-        `orphan CHECK_CONSTRAINTS row for ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name}`,
+        "SNOWFLAKE_CHECK_INVALID",
+        `conflicting CHECK metadata for ${identity.catalog}.${identity.schema}.${identity.tableName}.${identity.name}`,
       );
     }
   }
-
   const checksByTable = new Map();
   for (const check of checks.values()) {
     const constraint = {

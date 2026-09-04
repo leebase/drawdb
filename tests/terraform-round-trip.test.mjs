@@ -405,6 +405,7 @@ function modelConstraint(catalog, schema, table, name, kind, columnNames) {
     ),
     referenced_table_id: null,
     referenced_columns: [],
+    expression: null,
   };
 }
 
@@ -857,6 +858,65 @@ function minimalMySqlCreateTableAst() {
 }
 
 describe("SS-015 Terraform round-trip engineering", () => {
+  it("rejects CHECK-bearing canonical and embedded legacy inputs with a typed error", async () => {
+    const { canonicalProjectToTerraformHcl } = await loadTerraformRoundTrip();
+    const project = supportedCanonicalProject();
+    const table = project.physical_model.tables[0];
+    table.constraints.push({
+      id: `${table.id.replace("table:", "constraint:")}.CK_TEST`,
+      name: "CK_TEST",
+      kind: "check",
+      expression: "CUSTOMER_ID > 0",
+      columns: [],
+      referenced_columns: [],
+      referenced_table_id: null,
+    });
+    for (const value of [project, project.physical_model]) {
+      const before = structuredClone(value);
+      assert.throws(() => canonicalProjectToTerraformHcl(value), {
+        name: "SnowflakeCheckError",
+        code: "SNOWFLAKE_CHECK_UNSUPPORTED",
+      });
+      assert.deepEqual(value, before);
+    }
+    for (const legacy of [false, true]) {
+      const embedded = supportedCanonicalProject();
+      embedded.drawdb_document = {
+        tables: [
+          {
+            name: "T",
+            fields: legacy ? [{ name: "C", check: "C > 0" }] : [],
+            ...(legacy
+              ? {}
+              : {
+                  checkConstraints: [
+                    { id: "ck", name: "CK_T", expression: "C > 0" },
+                  ],
+                }),
+          },
+        ],
+      };
+      assert.throws(() => canonicalProjectToTerraformHcl(embedded), {
+        name: "SnowflakeCheckError",
+        code: "SNOWFLAKE_CHECK_UNSUPPORTED",
+      });
+    }
+  });
+
+  it("rejects Terraform CHECK forms before returning a partial model", async () => {
+    const { terraformHclToCanonicalProject } = await loadTerraformRoundTrip();
+    for (const hcl of [
+      'resource "snowflake_table_constraint" "c" { type = "CHECK" expression = "C > 0" }',
+      'resource "snowflake_check_constraint" "c" { expression = "C > 0" }',
+      'resource "snowflake_table" "t" { check { expression = "C > 0" } }',
+      'resource "snowflake_table" "t" { check_clause = "C > 0" }',
+    ]) {
+      assert.throws(() => terraformHclToCanonicalProject(hcl), {
+        name: "SnowflakeCheckError",
+        code: "SNOWFLAKE_CHECK_UNSUPPORTED",
+      });
+    }
+  });
   it("imports deterministic Snowflake Terraform HCL into the canonical physical model", async () => {
     const { terraformHclToCanonicalProject } = await loadTerraformRoundTrip();
 

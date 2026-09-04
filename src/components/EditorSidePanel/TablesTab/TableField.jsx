@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { Action, ObjectType } from "../../../data/constants";
+import { Action, DB, ObjectType } from "../../../data/constants";
 import { Input, Button, Popover, Select } from "@douyinfe/semi-ui";
 import { IconMore, IconKeyStroked } from "@douyinfe/semi-icons";
 import {
@@ -14,6 +14,7 @@ import { dbToTypes } from "../../../data/datatypes";
 import { DragHandle } from "../../SortableList/DragHandle";
 import FieldDetails from "./FieldDetails";
 import { getCustomTypesForDb, resolveType } from "../../../utils/customTypes";
+import { readSnowflakeTableChecks } from "./CheckConstraintDetails";
 
 export default function TableField({ data, tid, index, inherited }) {
   const { updateField } = useDiagram();
@@ -25,6 +26,16 @@ export default function TableField({ data, tid, index, inherited }) {
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const [editField, setEditField] = useState({});
   const table = useMemo(() => tables.find((t) => t.id === tid), [tables, tid]);
+  const snowflakeCheckState = useMemo(
+    () =>
+      database === DB.SNOWFLAKE
+        ? readSnowflakeTableChecks(table)
+        : { checks: [], error: null },
+    [database, table],
+  );
+  const hasSnowflakeChecks =
+    snowflakeCheckState.checks.length > 0 ||
+    Boolean(snowflakeCheckState.error);
 
   return (
     <div className="hover-1 my-2 flex gap-2 items-center">
@@ -33,12 +44,19 @@ export default function TableField({ data, tid, index, inherited }) {
       <div className="min-w-20 flex-1/3">
         <Input
           value={data.name}
-          title={data.name}
           id={`scroll_table_${tid}_input_${index}`}
           validateStatus={
             data.name.trim() === "" || inherited ? "error" : "default"
           }
           readonly={layout.readOnly}
+          disabled={hasSnowflakeChecks}
+          title={
+            snowflakeCheckState.error
+              ? "CHECK constraints could not be validated; structural edits are disabled"
+              : hasSnowflakeChecks
+              ? "Remove or revise CHECK constraints before renaming this column"
+              : data.name
+          }
           placeholder={t("name")}
           onChange={(value) => updateField(tid, data.id, { name: value })}
           onFocus={(e) => setEditField({ name: e.target.value })}
@@ -68,7 +86,11 @@ export default function TableField({ data, tid, index, inherited }) {
       <div className="min-w-24 flex-1/3">
         <Select
           className="w-full"
-          title={data.type}
+          title={
+            snowflakeCheckState.error
+              ? "CHECK constraints could not be validated; structural edits are disabled"
+              : data.type
+          }
           optionList={[
             ...Object.keys(dbToTypes[database]).map((value) => ({
               label: value,
@@ -89,6 +111,7 @@ export default function TableField({ data, tid, index, inherited }) {
           ]}
           filter
           value={data.type}
+          disabled={layout.readOnly || hasSnowflakeChecks}
           validateStatus={data.type === "" ? "error" : "default"}
           placeholder={t("type")}
           onChange={(value) => {
@@ -151,7 +174,6 @@ export default function TableField({ data, tid, index, inherited }) {
             } else if (typeInfo.hasCheck) {
               updateField(tid, data.id, {
                 type: finalType,
-                check: "",
                 increment: incr,
               });
             } else {
@@ -240,7 +262,7 @@ export default function TableField({ data, tid, index, inherited }) {
           position="right"
           showArrow
         >
-          <Button type="tertiary" icon={<IconMore />} />
+          <Button type="tertiary" icon={<IconMore />} aria-label={`Column details ${data.name}`} />
         </Popover>
       </div>
     </div>

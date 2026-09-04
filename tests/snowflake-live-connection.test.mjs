@@ -476,10 +476,6 @@ describe("live Snowflake Electron-main service", () => {
   it("fetches bounded CHECK metadata for every selected base table and preserves clauses", async () => {
     const { directory, configPath } = temporaryConfig();
     const driver = fakeDriver({
-      checkTableConstraints: [
-        checkConstraint("ALBUM", "CK_ALBUM"),
-        checkConstraint("ARTIST", "CK_ARTIST"),
-      ],
       checkMetadata: [
         checkConstraintsRow(
           "ALBUM",
@@ -532,7 +528,7 @@ describe("live Snowflake Electron-main service", () => {
     const tableConstraintQuery = driver.observed.queries.find(({ sqlText }) =>
       sqlText.includes(".TABLE_CONSTRAINTS"),
     );
-    assert.match(tableConstraintQuery.sqlText, /'CHECK'/);
+    assert.doesNotMatch(tableConstraintQuery.sqlText, /'CHECK'/);
 
     const diagram = snowflakeMetadataToDiagram(metadata, {
       title: "CHINOOK.PUBLIC",

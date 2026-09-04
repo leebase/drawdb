@@ -120,6 +120,91 @@ function proposedModel() {
 }
 
 describe("SS-014 logical schema proposals", () => {
+  it("rejects CHECK-losing logical projection with a typed error", () => {
+    for (const legacy of [false, true]) {
+      const diagram = snowflakeDiagram();
+      if (legacy) diagram.tables[0].fields[0].check = "CUSTOMER_ID > 0";
+      else
+        diagram.tables[0].checkConstraints = [
+          { id: "ck1", name: "CK_CUSTOMER_ID", expression: "CUSTOMER_ID > 0" },
+        ];
+      assert.throws(() => diagramToLogicalModel(diagram), {
+        name: "SnowflakeCheckError",
+        code: "SNOWFLAKE_CHECK_UNSUPPORTED",
+      });
+    }
+  });
+
+  it("preserves CHECK during safe proposal application and rejects structural edits atomically", () => {
+    const diagram = snowflakeDiagram();
+    diagram.tables[0].checkConstraints = [
+      { id: "ck1", name: "CK_CUSTOMER_ID", expression: "CUSTOMER_ID > 0" },
+    ];
+    const before = structuredClone(diagram);
+    const output = applyLogicalModel(diagram, proposedModel(), {
+      idFactory: (kind, key) => `${kind}-${key}`,
+    });
+    assert.deepEqual(
+      output.tables[0].checkConstraints,
+      before.tables[0].checkConstraints,
+    );
+    assert.deepEqual(diagram, before);
+
+    for (const change of [
+      (p) => {
+        p.tables[0].name = "RENAMED";
+      },
+      (p) => {
+        p.tables[0].columns[0].name = "RENAMED";
+      },
+      (p) => {
+        p.tables[0].columns[0].type = "VARCHAR(20)";
+      },
+      (p) => {
+        p.tables[0].columns[0].type = "NUMBER(12,0)";
+      },
+      (p) => {
+        p.tables[0].columns.shift();
+        p.relationships = [];
+      },
+      (p) => {
+        p.tables.shift();
+        p.relationships = [];
+      },
+    ]) {
+      const proposal = proposedModel();
+      change(proposal);
+      let allocations = 0;
+      assert.throws(
+        () =>
+          applyLogicalModel(diagram, proposal, {
+            idFactory: () => {
+              allocations += 1;
+              return "new";
+            },
+          }),
+        {
+          name: "SnowflakeCheckError",
+          code: "SNOWFLAKE_CHECK_STRUCTURAL_EDIT",
+        },
+      );
+      assert.equal(allocations, 0);
+      assert.deepEqual(diagram, before);
+    }
+  });
+
+  it("guards legacy field CHECK predicates on proposal removal", () => {
+    const diagram = snowflakeDiagram();
+    diagram.tables[0].fields[0].check = "CUSTOMER_ID > 0";
+    const proposal = proposedModel();
+    proposal.tables[0].columns.shift();
+    proposal.relationships = [];
+    assert.throws(() => applyLogicalModel(diagram, proposal), {
+      name: "SnowflakeCheckError",
+      code: "SNOWFLAKE_CHECK_STRUCTURAL_EDIT",
+    });
+  });
+
   it("projects a diagram into a credential-free strict logical model", () => {
     const model = diagramToLogicalModel(snowflakeDiagram());
     assert.equal(model.tables[0].key, "customer");
@@ -218,6 +303,24 @@ describe("SS-014 logical schema proposals", () => {
       () => validateLogicalModel(invalidRelationshipName, "snowflake"),
       /uppercase/,
     );
+  });
+
+  it("retains other-database legacy field.check behavior", () => {
+    for (const database of ["postgresql", "mysql"]) {
+      const diagram = snowflakeDiagram();
+      diagram.database = database;
+      const field = diagram.tables[0].fields[0];
+      field.type = "INTEGER";
+      field.size = "";
+      field.check = "CUSTOMER_ID > 0";
+      const proposal = diagramToLogicalModel(diagram);
+      proposal.tables[0].comment = "Safe comment edit";
+      const result = applyLogicalModel(diagram, proposal);
+      assert.equal(result.tables[0].fields[0].check, field.check);
+      assert.equal(result.tables[0].comment, "Safe comment edit");
+      diagram.tables[0].checkConstraints = [{ id: "c", name: "CK_C", expression: field.check }];
+      assert.throws(() => diagramToLogicalModel(diagram), (error) => error.code === "SNOWFLAKE_CHECK_UNSUPPORTED");
+    }
   });
 
   it("uses Snowflake family rules for logical proposal types", () => {
