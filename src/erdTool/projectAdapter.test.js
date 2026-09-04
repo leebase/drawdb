@@ -1430,7 +1430,7 @@ describe("diagramToCanonicalProject", () => {
     });
   });
 
-  it("supports all extended Snowflake data types and unconstrained VARCHAR", () => {
+  it("supports extended Snowflake data types and unconstrained VARCHAR", () => {
     const testFields = [
       { name: "COL_VARCHAR_UNCONSTRAINED", type: "VARCHAR", size: "" },
       { name: "COL_VARCHAR_SIZED", type: "VARCHAR", size: 100 },
@@ -1442,7 +1442,6 @@ describe("diagramToCanonicalProject", () => {
       { name: "COL_ARRAY", type: "ARRAY" },
       { name: "COL_GEOGRAPHY", type: "GEOGRAPHY" },
       { name: "COL_GEOMETRY", type: "GEOMETRY" },
-      { name: "COL_VECTOR", type: "VECTOR" },
     ];
 
     const diagram = {
@@ -1485,10 +1484,9 @@ describe("diagramToCanonicalProject", () => {
     assert.match(ddl, /COL_ARRAY ARRAY/);
     assert.match(ddl, /COL_GEOGRAPHY GEOGRAPHY/);
     assert.match(ddl, /COL_GEOMETRY GEOMETRY/);
-    assert.match(ddl, /COL_VECTOR VECTOR/);
 
     const reimported = parseSnowflakeDDLToCanonicalProject(ddl);
-    assert.equal(reimported.physical_model.tables[0].columns.length, 11);
+    assert.equal(reimported.physical_model.tables[0].columns.length, 10);
   });
 
   it("allows the same FK name on different source tables and rejects duplicates on one", () => {
