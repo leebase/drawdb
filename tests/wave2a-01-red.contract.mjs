@@ -5,6 +5,7 @@ import {
   parseSnowflakeDDLToCanonicalProject,
   renderCanonicalSnowflakeDDL,
 } from "../src/erdTool/projectAdapter.js";
+import { openDesktopProject } from "../src/erdTool/desktopBridge.js";
 import {
   snowflakeMetadataToCanonicalProject,
   snowflakeMetadataToDiagram,
@@ -13,7 +14,6 @@ import { createSnowflakeService } from "../src/electron/snowflakeService.js";
 import { cloneFixture, vectorFixtures, v1Fixtures } from "./wave2a-01-fixtures.mjs";
 import {
   assertSemanticEqual,
-  semanticModel,
 } from "./wave2a-01-parity.mjs";
 
 function vectorDiagram(fields) {
@@ -50,6 +50,38 @@ function vectorField(id, name, size) {
   };
 }
 
+function singleFieldDiagram(type, size, name = "VALUE") {
+  return {
+    database: "snowflake",
+    title: "SINGLE_FIELD_CONTRACT",
+    tables: [
+      {
+        id: "single-field-table",
+        name: "SINGLE_FIELD",
+        x: 0,
+        y: 0,
+        fields: [
+          {
+            id: "single-field",
+            name,
+            type,
+            size,
+            default: "",
+            check: "",
+            primary: false,
+            unique: false,
+            notNull: false,
+            increment: false,
+            comment: "",
+          },
+        ],
+      },
+    ],
+    relationships: [],
+    transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+  };
+}
+
 function checkDiagram() {
   return {
     database: "snowflake",
@@ -67,12 +99,56 @@ function checkDiagram() {
             type: "NUMBER",
             size: "12,2",
             default: "",
-            check: "AMOUNT >= 0",
+            check: "",
             primary: false,
             unique: false,
             notNull: true,
             increment: false,
             comment: "Non-negative amount",
+          },
+          {
+            id: "start-at",
+            name: "START_AT",
+            type: "TIMESTAMP_NTZ",
+            size: 9,
+            default: "",
+            check: "",
+            primary: false,
+            unique: false,
+            notNull: false,
+            increment: false,
+            comment: "Window start",
+          },
+          {
+            id: "end-at",
+            name: "END_AT",
+            type: "TIMESTAMP_NTZ",
+            size: 9,
+            default: "",
+            check: "",
+            primary: false,
+            unique: false,
+            notNull: false,
+            increment: false,
+            comment: "Window end",
+          },
+        ],
+        // CHECK belongs to the table because an expression may reference zero,
+        // one, or multiple columns.  The physical target is table.check_constraints.
+        checkConstraints: [
+          {
+            id: "check-amount",
+            name: "CK_CHECKED_AMOUNT",
+            expression: "AMOUNT >= 0",
+            validation: "UNKNOWN",
+            nameOrigin: "unknown",
+          },
+          {
+            id: "check-window",
+            name: null,
+            expression: "START_AT <= END_AT",
+            validation: "UNKNOWN",
+            nameOrigin: "unknown",
           },
         ],
       },
@@ -82,12 +158,25 @@ function checkDiagram() {
   };
 }
 
-function renderedColumnCheck(ddl, columnName) {
-  const line = ddl
-    .split("\n")
-    .find((candidate) => candidate.trimStart().startsWith(`${columnName} `));
-  if (!line) return null;
-  return line.match(/\bCHECK\s*\((.*)\)\s*$/i)?.[1] ?? null;
+async function openSerializedProject(serialized) {
+  const originalWindow = globalThis.window;
+  try {
+    globalThis.window = {
+      drawdbDesktop: {
+        projectFiles: {
+          open: async () => ({
+            canceled: false,
+            contents: JSON.stringify(serialized),
+            modifiedAt: "2026-09-04T00:00:00.000Z",
+          }),
+        },
+      },
+    };
+    return await openDesktopProject();
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
 }
 
 function metadataColumn(
@@ -252,19 +341,22 @@ async function connectedService(mock) {
 }
 
 describe("Wave 2A explicit RED contracts (known defects)", () => {
-  it("does not guess a valid DDL type for the unresolved bare VECTOR v1 fixture", () => {
+  it("does not guess a valid DDL type for an unresolved canonical-v1 bare VECTOR", async () => {
     const fixture = cloneFixture(v1Fixtures.bareVector);
-    assert.equal(fixture.version, "v1");
+    assert.equal(fixture.serialized.project_version, "1");
+    assert.equal(fixture.serialized.physical_model.model_version, "1");
     assert.deepEqual(fixture.expected, {
       exportable: false,
       status: "unresolved",
       reason: "VECTOR requires an INT or FLOAT element type and a positive dimension",
     });
 
+    const opened = await openSerializedProject(fixture.serialized);
     // Either rejecting at the canonical boundary or rejecting at the renderer
     // is acceptable while the fixture remains unresolved; emitting DDL is not.
     assert.throws(
-      () => renderCanonicalSnowflakeDDL(diagramToCanonicalProject(fixture.diagram)),
+      () =>
+        renderCanonicalSnowflakeDDL(diagramToCanonicalProject(opened.diagram)),
       /VECTOR|element|dimension|unsupported/i,
     );
   });
@@ -283,6 +375,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
         precision: column.data_type.precision,
         scale: column.data_type.scale,
         length: column.data_type.length,
+        vector_element_type: column.data_type.vector_element_type ?? null,
+        vector_dimension: column.data_type.vector_dimension ?? null,
       })),
       [
         {
@@ -291,6 +385,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: null,
           scale: null,
           length: null,
+          vector_element_type: "INT",
+          vector_dimension: 3,
         },
         {
           family: "VECTOR",
@@ -298,6 +394,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: null,
           scale: null,
           length: null,
+          vector_element_type: "FLOAT",
+          vector_dimension: 1536,
         },
       ],
     );
@@ -311,34 +409,30 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
     assertSemanticEqual(assert, imported, project);
   });
 
-  it("rejects unsupported VECTOR element types and invalid dimensions", () => {
-    for (const fixture of vectorFixtures.invalid) {
-      assert.throws(
-        () =>
-          diagramToCanonicalProject(
-            vectorDiagram([vectorField("invalid-vector", "VALUE", fixture.size)]),
-          ),
-        /VECTOR|element|dimension|unsupported|parameter/i,
-        fixture.reason,
-      );
-    }
-  });
-
-  it("preserves a Snowflake CHECK from editor DTO through canonical model and DDL", () => {
+  it("preserves table-level Snowflake CHECK collections through canonical model and deterministic DDL", () => {
     const project = diagramToCanonicalProject(checkDiagram());
-    const column = project.physical_model.tables[0].columns[0];
+    const checks = project.physical_model.tables[0].check_constraints;
     const ddl = renderCanonicalSnowflakeDDL(project);
 
-    assert.deepEqual(
+    assert.deepEqual(checks, [
       {
-        canonicalCheck: column.check ?? null,
-        renderedCheck: renderedColumnCheck(ddl, "AMOUNT"),
+        id: "check-amount",
+        name: "CK_CHECKED_AMOUNT",
+        expression: "AMOUNT >= 0",
+        validation: "UNKNOWN",
+        name_origin: "unknown",
       },
       {
-        canonicalCheck: "AMOUNT >= 0",
-        renderedCheck: "AMOUNT >= 0",
+        id: "check-window",
+        name: null,
+        expression: "START_AT <= END_AT",
+        validation: "UNKNOWN",
+        name_origin: "unknown",
       },
-    );
+    ]);
+    assert.equal(ddl, renderCanonicalSnowflakeDDL(project));
+    assert.match(ddl, /CONSTRAINT CK_CHECKED_AMOUNT CHECK \(AMOUNT >= 0\)/);
+    assert.match(ddl, /CHECK \(START_AT <= END_AT\)/);
   });
 
   it("issues a CHECK_CONSTRAINTS metadata query during reverse engineering", async () => {
@@ -391,42 +485,107 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
     ]);
   });
 
-  it("maps mocked CHECK_CONSTRAINTS rows into canonical and editor CHECK fields", () => {
+  it("maps mocked CHECK_CONSTRAINTS rows into table-level canonical and editor CHECK collections", () => {
     const metadata = checkMetadataFixture();
     const project = snowflakeMetadataToCanonicalProject(metadata, {
       name: "CHECKED",
     });
     const diagram = snowflakeMetadataToDiagram(metadata, { title: "CHECKED" });
-    const canonicalColumn = project.physical_model.tables[0].columns[0];
-    const editorColumn = diagram.tables[0].fields[0];
 
-    assert.deepEqual(
+    assert.deepEqual(project.physical_model.tables[0].check_constraints, [
       {
-        canonicalCheck: canonicalColumn.check ?? null,
-        editorCheck: editorColumn.check ?? null,
+        id: "constraint:ANALYTICS.CORE.CHECKED.CK_CHECKED_SCORE",
+        name: "CK_CHECKED_SCORE",
+        expression: "SCORE >= 0",
+        validation: "UNKNOWN",
+        name_origin: "unknown",
       },
+    ]);
+    assert.deepEqual(diagram.tables[0].checkConstraints, [
       {
-        canonicalCheck: "SCORE >= 0",
-        editorCheck: "SCORE >= 0",
+        id: "constraint:ANALYTICS.CORE.CHECKED.CK_CHECKED_SCORE",
+        name: "CK_CHECKED_SCORE",
+        expression: "SCORE >= 0",
+        validation: "UNKNOWN",
+        nameOrigin: "unknown",
       },
-    );
+    ]);
   });
 
-  it("keeps VARCHAR/BINARY metadata maxima as explicit canonical defaults", () => {
-    const metadata = checkMetadataFixture({
-      columns: [
-        metadataColumn("CHECKED", "TEXT_VALUE", "VARCHAR", 1),
-        metadataColumn("CHECKED", "BINARY_VALUE", "BINARY", 2),
-      ],
-    });
-    const project = snowflakeMetadataToCanonicalProject(metadata, {
-      name: "DEFAULT_BOUNDS",
-    });
-    const columns = project.physical_model.tables[0].columns;
+  it("accepts current Snowflake VARCHAR/BINARY maxima and rejects one above each", () => {
+    for (const [type, maximum] of [
+      ["VARCHAR", 134_217_728],
+      ["BINARY", 67_108_864],
+    ]) {
+      const accepted = diagramToCanonicalProject(
+        singleFieldDiagram(type, maximum, `${type}_MAX`),
+      );
+      assert.equal(
+        accepted.physical_model.tables[0].columns[0].data_type.length,
+        maximum,
+        `${type} current maximum must remain representable`,
+      );
+      assert.throws(
+        () =>
+          diagramToCanonicalProject(
+            singleFieldDiagram(type, maximum + 1, `${type}_OVER_MAX`),
+          ),
+        /between 1 and|maximum|bound/i,
+        `${type} values above the current maximum must reject`,
+      );
+    }
+  });
 
+  it("accepts bare BINARY as the canonical default length 8388608", () => {
+    const project = diagramToCanonicalProject(singleFieldDiagram("BINARY", ""));
+    assert.deepEqual(project.physical_model.tables[0].columns[0].data_type, {
+      family: "BINARY",
+      text: "BINARY(8388608)",
+      precision: null,
+      scale: null,
+      length: 8_388_608,
+    });
+  });
+
+  it("canonicalizes representative Snowflake aliases in DDL input", () => {
+    // Canonical expectations: DECIMAL/INT -> NUMBER(38, 0), CHAR ->
+    // VARCHAR(1), TEXT -> VARCHAR(16777216), VARBINARY -> BINARY(8388608),
+    // DOUBLE PRECISION -> FLOAT, and TIMESTAMP -> TIMESTAMP_NTZ(9).
+    const project = parseSnowflakeDDLToCanonicalProject(`
+      CREATE TABLE ANALYTICS.CORE.ALIASES (
+        DECIMAL_VALUE DECIMAL,
+        INT_VALUE INT,
+        CHAR_VALUE CHAR,
+        TEXT_VALUE TEXT,
+        VARBINARY_VALUE VARBINARY,
+        DOUBLE_VALUE DOUBLE PRECISION,
+        TIMESTAMP_VALUE TIMESTAMP
+      );
+    `, { name: "ALIASES" });
     assert.deepEqual(
-      columns.map((column) => column.data_type),
+      project.physical_model.tables[0].columns.map((column) => column.data_type),
       [
+        {
+          family: "NUMBER",
+          text: "NUMBER(38, 0)",
+          precision: 38,
+          scale: 0,
+          length: null,
+        },
+        {
+          family: "NUMBER",
+          text: "NUMBER(38, 0)",
+          precision: 38,
+          scale: 0,
+          length: null,
+        },
+        {
+          family: "VARCHAR",
+          text: "VARCHAR(1)",
+          precision: null,
+          scale: null,
+          length: 1,
+        },
         {
           family: "VARCHAR",
           text: "VARCHAR(16777216)",
@@ -441,75 +600,41 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           scale: null,
           length: 8_388_608,
         },
+        {
+          family: "FLOAT",
+          text: "FLOAT",
+          precision: null,
+          scale: null,
+          length: null,
+        },
+        {
+          family: "TIMESTAMP_NTZ",
+          text: "TIMESTAMP_NTZ(9)",
+          precision: 9,
+          scale: null,
+          length: null,
+        },
       ],
     );
   });
 
-  it("preserves CHAR's length-one default while normalizing its alias", async () => {
-    const tableName = "ALIASES";
-    const mock = mockSnowflakeDriver({
-      tableName,
-      columns: [
-        metadataColumn(tableName, "CHAR_VALUE", "CHAR", 1),
-        metadataColumn(tableName, "TEXT_VALUE", "TEXT", 2),
-        metadataColumn(tableName, "VARCHAR_VALUE", "VARCHAR", 3),
-        metadataColumn(tableName, "BINARY_VALUE", "BINARY", 4),
-        metadataColumn(tableName, "INT_VALUE", "INT", 5),
-      ],
-    });
-    const service = await connectedService(mock);
-    const metadata = await service.reverseEngineer({
-      sessionId: "wave2a-session",
-      database: "ANALYTICS",
-      schema: "CORE",
-      tables: [tableName],
-    });
-    const project = snowflakeMetadataToCanonicalProject(metadata, {
-      name: "ALIASES",
-    });
-    const columns = Object.fromEntries(
-      project.physical_model.tables[0].columns.map((column) => [
-        column.name,
-        column.data_type,
-      ]),
+  it("does not silently drop a legacy field.check; migrate it or reject it explicitly", () => {
+    const fixture = cloneFixture(v1Fixtures.legacyFieldCheck);
+    let project;
+    try {
+      project = diagramToCanonicalProject(fixture.diagram);
+    } catch (error) {
+      assert.match(error.message, /check|legacy/i);
+      return;
+    }
+    const checks = project.physical_model.tables[0].check_constraints;
+    assert.ok(
+      Array.isArray(checks),
+      "legacy field.check requires an explicit table-level migration",
     );
-
-    assert.deepEqual(columns, {
-      CHAR_VALUE: {
-        family: "VARCHAR",
-        text: "VARCHAR(1)",
-        precision: null,
-        scale: null,
-        length: 1,
-      },
-      TEXT_VALUE: {
-        family: "VARCHAR",
-        text: "VARCHAR(16777216)",
-        precision: null,
-        scale: null,
-        length: 16_777_216,
-      },
-      VARCHAR_VALUE: {
-        family: "VARCHAR",
-        text: "VARCHAR(16777216)",
-        precision: null,
-        scale: null,
-        length: 16_777_216,
-      },
-      BINARY_VALUE: {
-        family: "BINARY",
-        text: "BINARY(8388608)",
-        precision: null,
-        scale: null,
-        length: 8_388_608,
-      },
-      INT_VALUE: {
-        family: "NUMBER",
-        text: "NUMBER(38, 0)",
-        precision: 38,
-        scale: 0,
-        length: null,
-      },
-    });
+    assert.ok(
+      checks.some((check) => check.expression === fixture.expected.expression),
+      "legacy field.check expression must survive explicit migration",
+    );
   });
 });

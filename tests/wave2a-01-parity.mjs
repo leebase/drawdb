@@ -2,22 +2,19 @@
 //
 // These deliberately compare the values that affect a Snowflake schema rather
 // than relying on object counts, names, or the source SQL text alone.  The
-// vector parameters are decoded from the canonical type text because v1's
-// existing type contract stores the canonical SQL spelling in `text`.
+// Vector parameters are explicit canonical fields in the planned v2 shape;
+// the canonical SQL spelling in `text` is compared as a second independent
+// semantic value rather than being used to infer either parameter.
 
 function semanticDataType(dataType) {
-  const vector = /^VECTOR\((INT|FLOAT),\s*(\d+)\)$/i.exec(
-    String(dataType?.text ?? ""),
-  );
-
   return {
     family: dataType?.family ?? null,
     text: dataType?.text ?? null,
     precision: dataType?.precision ?? null,
     scale: dataType?.scale ?? null,
     length: dataType?.length ?? null,
-    vectorElement: vector ? vector[1].toUpperCase() : null,
-    vectorDimension: vector ? Number(vector[2]) : null,
+    vector_element_type: dataType?.vector_element_type ?? null,
+    vector_dimension: dataType?.vector_dimension ?? null,
   };
 }
 function semanticColumn(column) {
@@ -29,7 +26,6 @@ function semanticColumn(column) {
     nullable: column.nullable,
     default: column.default ?? null,
     comment: column.comment ?? null,
-    check: column.check ?? null,
   };
 }
 
@@ -42,7 +38,16 @@ function semanticConstraint(constraint) {
     columns: [...(constraint.columns ?? [])],
     referencedTableId: constraint.referenced_table_id ?? null,
     referencedColumns: [...(constraint.referenced_columns ?? [])],
-    expression: constraint.expression ?? null,
+  };
+}
+
+function semanticCheckConstraint(checkConstraint) {
+  return {
+    id: checkConstraint.id,
+    name: checkConstraint.name ?? null,
+    expression: checkConstraint.expression,
+    validation: checkConstraint.validation ?? null,
+    name_origin: checkConstraint.name_origin ?? null,
   };
 }
 
@@ -75,6 +80,9 @@ export function semanticModel(projectOrModel) {
       kind: table.kind,
       columns: (table.columns ?? []).map(semanticColumn),
       constraints: (table.constraints ?? []).map(semanticConstraint),
+      check_constraints: (table.check_constraints ?? []).map(
+        semanticCheckConstraint,
+      ),
       comment: table.comment ?? null,
     })),
     relationships: (model.relationships ?? []).map(semanticRelationship),

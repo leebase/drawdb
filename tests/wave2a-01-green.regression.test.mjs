@@ -8,12 +8,73 @@ import {
 } from "../src/erdTool/projectAdapter.js";
 import {
   exportDesktopSnowflakeDDL,
+  openDesktopProject,
 } from "../src/erdTool/desktopBridge.js";
-import { cloneFixture, v1Fixtures } from "./wave2a-01-fixtures.mjs";
+import {
+  cloneFixture,
+  vectorFixtures,
+  v1Fixtures,
+} from "./wave2a-01-fixtures.mjs";
+import { snowflakeMetadataToCanonicalProject } from "../src/erdTool/snowflakeMetadata.js";
 import {
   assertSemanticEqual,
-  semanticModel,
 } from "./wave2a-01-parity.mjs";
+
+async function openSerializedProject(serialized) {
+  const originalWindow = globalThis.window;
+  try {
+    globalThis.window = {
+      drawdbDesktop: {
+        projectFiles: {
+          open: async () => ({
+            canceled: false,
+            contents: JSON.stringify(serialized),
+            modifiedAt: "2026-09-04T00:00:00.000Z",
+          }),
+        },
+      },
+    };
+    return await openDesktopProject();
+  } finally {
+    if (originalWindow === undefined) delete globalThis.window;
+    else globalThis.window = originalWindow;
+  }
+}
+
+function vectorField(size) {
+  return {
+    id: "vector-value",
+    name: "VALUE",
+    type: "VECTOR",
+    size,
+    default: "",
+    check: "",
+    primary: false,
+    unique: false,
+    notNull: false,
+    increment: false,
+    comment: "",
+  };
+}
+
+function metadataColumn(table, name, dataType, ordinal, overrides = {}) {
+  return {
+    table_catalog: "ANALYTICS",
+    table_schema: "CORE",
+    table_name: table,
+    column_name: name,
+    ordinal_position: ordinal,
+    column_default: null,
+    is_nullable: "YES",
+    data_type: dataType,
+    character_maximum_length: null,
+    numeric_precision: null,
+    numeric_scale: null,
+    datetime_precision: null,
+    comment: null,
+    ...overrides,
+  };
+}
 
 function acceptedCoreTypesDiagram() {
   return {
@@ -275,6 +336,31 @@ describe("Wave 2A accepted Snowflake regressions", () => {
     assert.match(ddl, /OFFSET_AT TIMESTAMP_TZ\(0\)/);
   });
 
+  it("rejects unsupported VECTOR element types and invalid dimensions", () => {
+    for (const fixture of vectorFixtures.invalid) {
+      assert.throws(
+        () =>
+          diagramToCanonicalProject({
+            database: "snowflake",
+            title: "INVALID_VECTOR",
+            tables: [
+              {
+                id: "invalid-vector-table",
+                name: "INVALID_VECTOR",
+                x: 0,
+                y: 0,
+                fields: [vectorField(fixture.size)],
+              },
+            ],
+            relationships: [],
+            transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+          }),
+        /VECTOR|element|dimension|unsupported|parameter/i,
+        fixture.reason,
+      );
+    }
+  });
+
   it("preserves ordered PK, composite UNIQUE, and composite FK semantics", () => {
     const original = diagramToCanonicalProject(keySemanticsDiagram());
     const imported = parseSnowflakeDDLToCanonicalProject(
@@ -316,71 +402,29 @@ describe("Wave 2A accepted Snowflake regressions", () => {
     );
   });
 
-  it("migrates the supported v1 fixture without guessing", () => {
+  it("opens and migrates a serialized canonical project_version/model_version v1 fixture", async () => {
     const fixture = cloneFixture(v1Fixtures.nonVectorMigration);
-    assert.equal(fixture.version, "v1");
+    assert.equal(fixture.serialized.project_version, "1");
+    assert.equal(fixture.serialized.physical_model.model_version, "1");
     assert.deepEqual(fixture.expected, {
       exportable: true,
       status: "supported",
     });
 
-    const project = diagramToCanonicalProject(fixture.diagram);
+    const opened = await openSerializedProject(fixture.serialized);
+    assert.equal(opened.canceled, false);
+    assert.equal(opened.diagram.tables[0].name, "EVENTS");
+    const project = diagramToCanonicalProject(opened.diagram);
+    assertSemanticEqual(assert, project, fixture.serialized);
     const ddl = renderCanonicalSnowflakeDDL(project);
-    const reopened = canonicalProjectToDiagram(
-      parseSnowflakeDDLToCanonicalProject(ddl, {
-        name: project.physical_model.name,
-      }),
-    );
-
-    assert.equal(reopened.database, undefined);
-    assert.equal(reopened.tables[0].name, "EVENTS");
-    assert.deepEqual(
-      semanticModel(project).tables[0].columns.map((column) => ({
-        name: column.name,
-        type: column.dataType,
-        nullable: column.nullable,
-        default: column.default,
-        comment: column.comment,
-        check: column.check,
-      })),
-      [
-        {
-          name: "EVENT_ID",
-          type: {
-            family: "NUMBER",
-            text: "NUMBER(38, 0)",
-            precision: 38,
-            scale: 0,
-            length: null,
-            vectorElement: null,
-            vectorDimension: null,
-          },
-          nullable: false,
-          default: null,
-          comment: "Stable event id",
-          check: null,
-        },
-        {
-          name: "LABEL",
-          type: {
-            family: "VARCHAR",
-            text: "VARCHAR(320)",
-            precision: null,
-            scale: null,
-            length: 320,
-            vectorElement: null,
-            vectorDimension: null,
-          },
-          nullable: true,
-          default: null,
-          comment: "Human label",
-          check: null,
-        },
-      ],
-    );
+    const reopenedProject = parseSnowflakeDDLToCanonicalProject(ddl, {
+      name: project.physical_model.name,
+    });
+    assertSemanticEqual(assert, reopenedProject, project);
+    assert.equal(canonicalProjectToDiagram(reopenedProject).tables[0].name, "EVENTS");
   });
 
-  it("enforces Snowflake type bounds at both exact maxima and just above them", () => {
+  it("retains accepted legacy VARCHAR/BINARY maxima", () => {
     const fields = [
       ["VARCHAR_MIN", "VARCHAR", 1],
       ["VARCHAR_MAX", "VARCHAR", 16_777_216],
@@ -418,39 +462,52 @@ describe("Wave 2A accepted Snowflake regressions", () => {
     const columns = model.physical_model.tables[0].columns;
     assert.equal(columns[1].data_type.length, 16_777_216);
     assert.equal(columns[3].data_type.length, 8_388_608);
+  });
 
-    for (const [type, size] of [
-      ["VARCHAR", 16_777_217],
-      ["BINARY", 8_388_609],
-    ]) {
-      assert.throws(
-        () =>
-          diagramToCanonicalProject({
-            database: "snowflake",
-            title: "OUT_OF_BOUNDS",
-            tables: [
-              {
-                id: "out-of-bounds",
-                name: "OUT_OF_BOUNDS",
-                x: 0,
-                y: 0,
-                fields: [
-                  {
-                    ...fields[0],
-                    id: "bad-bound",
-                    name: "VALUE",
-                    type,
-                    size,
-                  },
-                ],
-              },
-            ],
-            relationships: [],
-            transform: { pan: { x: 0, y: 0 }, zoom: 1 },
-          }),
-        /between 1 and/i,
-      );
-    }
+  it("retains current VARCHAR/BINARY metadata maxima and bare defaults", () => {
+    const metadata = {
+      schemata: [
+        { catalog_name: "ANALYTICS", schema_name: "CORE", schema_comment: null },
+      ],
+      tables: [
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "DEFAULT_BOUNDS",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+      ],
+      columns: [
+        metadataColumn("DEFAULT_BOUNDS", "TEXT_VALUE", "VARCHAR", 1),
+        metadataColumn("DEFAULT_BOUNDS", "BINARY_VALUE", "BINARY", 2),
+      ],
+      tableConstraints: [],
+      keyColumnUsage: [],
+      referentialConstraints: [],
+    };
+    const columns = snowflakeMetadataToCanonicalProject(metadata, {
+      name: "DEFAULT_BOUNDS",
+    }).physical_model.tables[0].columns;
+    assert.deepEqual(
+      columns.map((column) => column.data_type),
+      [
+        {
+          family: "VARCHAR",
+          text: "VARCHAR(16777216)",
+          precision: null,
+          scale: null,
+          length: 16_777_216,
+        },
+        {
+          family: "BINARY",
+          text: "BINARY(8388608)",
+          precision: null,
+          scale: null,
+          length: 8_388_608,
+        },
+      ],
+    );
   });
 
   it("saves Snowflake DDL without exposing a renderer execution path", async () => {

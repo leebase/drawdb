@@ -1,8 +1,13 @@
-// v1 fixtures are intentionally explicit about whether a diagram is
-// losslessly supported.  In particular, a bare VECTOR is unresolved: tests
-// must reject it rather than inventing a type parameter or DDL spelling.
+// v1 fixtures are serialized canonical projects, not editor-shaped examples.
+// They are opened through the same JSON -> canonicalProjectToDiagram seam that
+// native project files use.  A bare VECTOR remains explicitly unresolved: no
+// test may invent an element type or dimension for it.
 
-const emptyTransform = { pan: { x: 0, y: 0 }, zoom: 1 };
+const coreNamespace = {
+  id: "namespace:ANALYTICS.CORE",
+  catalog: "ANALYTICS",
+  schema: "CORE",
+};
 
 export const v1Fixtures = Object.freeze({
   nonVectorMigration: {
@@ -11,53 +16,71 @@ export const v1Fixtures = Object.freeze({
       exportable: true,
       status: "supported",
     }),
-    diagram: {
-      database: "snowflake",
-      title: "V1_SUPPORTED_EVENTS",
-      tables: [
-        {
-          id: "legacy-events",
-          name: "EVENTS",
-          x: 40,
-          y: 80,
-          comment: "Supported v1 fixture",
-          namespace: {
-            id: "namespace:ANALYTICS.CORE",
-            catalog: "ANALYTICS",
-            schema: "CORE",
+    serialized: {
+      project_version: "1",
+      physical_model: {
+        model_version: "1",
+        name: "V1_SUPPORTED_EVENTS",
+        namespaces: [coreNamespace],
+        tables: [
+          {
+            id: "table:ANALYTICS.CORE.EVENTS",
+            namespace_id: "namespace:ANALYTICS.CORE",
+            name: "EVENTS",
+            kind: "table",
+            columns: [
+              {
+                id: "column:ANALYTICS.CORE.EVENTS.EVENT_ID",
+                name: "EVENT_ID",
+                ordinal: 1,
+                data_type: {
+                  family: "NUMBER",
+                  text: "NUMBER(38, 0)",
+                  precision: 38,
+                  scale: 0,
+                  length: null,
+                },
+                nullable: false,
+                default: null,
+                comment: "Stable event id",
+              },
+              {
+                id: "column:ANALYTICS.CORE.EVENTS.LABEL",
+                name: "LABEL",
+                ordinal: 2,
+                data_type: {
+                  family: "VARCHAR",
+                  text: "VARCHAR(320)",
+                  precision: null,
+                  scale: null,
+                  length: 320,
+                },
+                nullable: true,
+                default: null,
+                comment: "Human label",
+              },
+            ],
+            constraints: [
+              {
+                id: "constraint:ANALYTICS.CORE.EVENTS.PK_EVENTS",
+                name: "PK_EVENTS",
+                kind: "primary_key",
+                columns: ["column:ANALYTICS.CORE.EVENTS.EVENT_ID"],
+                referenced_table_id: null,
+                referenced_columns: [],
+              },
+            ],
+            comment: "Supported v1 fixture",
           },
-          fields: [
-            {
-              id: "legacy-events-id",
-              name: "EVENT_ID",
-              type: "NUMBER",
-              size: "38,0",
-              default: "",
-              check: "",
-              primary: true,
-              unique: false,
-              notNull: true,
-              increment: false,
-              comment: "Stable event id",
-            },
-            {
-              id: "legacy-events-label",
-              name: "LABEL",
-              type: "VARCHAR",
-              size: 320,
-              default: "",
-              check: "",
-              primary: false,
-              unique: false,
-              notNull: false,
-              increment: false,
-              comment: "Human label",
-            },
-          ],
+        ],
+        relationships: [],
+      },
+      diagram_layout: {
+        nodes: {
+          "table:ANALYTICS.CORE.EVENTS": { x: 40, y: 80 },
         },
-      ],
-      relationships: [],
-      transform: emptyTransform,
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
     },
   },
   bareVector: {
@@ -67,40 +90,82 @@ export const v1Fixtures = Object.freeze({
       status: "unresolved",
       reason: "VECTOR requires an INT or FLOAT element type and a positive dimension",
     }),
+    serialized: {
+      project_version: "1",
+      physical_model: {
+        model_version: "1",
+        name: "V1_UNRESOLVED_VECTOR",
+        namespaces: [coreNamespace],
+        tables: [
+          {
+            id: "table:ANALYTICS.CORE.EMBEDDINGS",
+            namespace_id: "namespace:ANALYTICS.CORE",
+            name: "EMBEDDINGS",
+            kind: "table",
+            columns: [
+              {
+                id: "column:ANALYTICS.CORE.EMBEDDINGS.VALUE",
+                name: "VALUE",
+                ordinal: 1,
+                data_type: {
+                  family: "VECTOR",
+                  text: "VECTOR",
+                  precision: null,
+                  scale: null,
+                  length: null,
+                },
+                nullable: true,
+                default: null,
+                comment: "Missing element type and dimension",
+              },
+            ],
+            constraints: [],
+            comment: "Bare vector must not be guessed",
+          },
+        ],
+        relationships: [],
+      },
+      diagram_layout: {
+        nodes: {
+          "table:ANALYTICS.CORE.EMBEDDINGS": { x: 40, y: 80 },
+        },
+        viewport: { x: 0, y: 0, zoom: 1 },
+      },
+    },
+  },
+  legacyFieldCheck: {
+    expected: Object.freeze({
+      expression: "AMOUNT >= 0",
+      outcome: "migrate-or-typed-reject",
+    }),
     diagram: {
       database: "snowflake",
-      title: "V1_UNRESOLVED_VECTOR",
+      title: "LEGACY_FIELD_CHECK",
       tables: [
         {
-          id: "legacy-vector",
-          name: "EMBEDDINGS",
-          x: 40,
-          y: 80,
-          comment: "Bare vector must not be guessed",
-          namespace: {
-            id: "namespace:ANALYTICS.CORE",
-            catalog: "ANALYTICS",
-            schema: "CORE",
-          },
+          id: "legacy-checked",
+          name: "LEGACY_CHECKED",
+          x: 0,
+          y: 0,
           fields: [
             {
-              id: "legacy-vector-value",
-              name: "VALUE",
-              type: "VECTOR",
-              size: "",
+              id: "legacy-amount",
+              name: "AMOUNT",
+              type: "NUMBER",
+              size: "12,2",
               default: "",
-              check: "",
+              check: "AMOUNT >= 0",
               primary: false,
               unique: false,
               notNull: false,
               increment: false,
-              comment: "Missing element type and dimension",
+              comment: "Legacy field-level check",
             },
           ],
         },
       ],
       relationships: [],
-      transform: emptyTransform,
+      transform: { pan: { x: 0, y: 0 }, zoom: 1 },
     },
   },
 });
