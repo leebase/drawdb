@@ -14,7 +14,7 @@ import { getCommentHeight, getFieldOffsetY } from "./utils";
  * @param {number} zoom - Zoom level (used to scale vertical spacing).
  * @returns {string} SVG path "d" attribute string.
  */
-export function calcPath(r, tableWidth = 200, zoom = 1, showComments = true) {
+export function calcPath(r, tableWidth = 280, zoom = 1, showComments = true) {
   if (!r) {
     return "";
   }

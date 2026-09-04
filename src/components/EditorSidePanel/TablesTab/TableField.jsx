@@ -33,6 +33,7 @@ export default function TableField({ data, tid, index, inherited }) {
       <div className="min-w-20 flex-1/3">
         <Input
           value={data.name}
+          title={data.name}
           id={`scroll_table_${tid}_input_${index}`}
           validateStatus={
             data.name.trim() === "" || inherited ? "error" : "default"
@@ -67,6 +68,7 @@ export default function TableField({ data, tid, index, inherited }) {
       <div className="min-w-24 flex-1/3">
         <Select
           className="w-full"
+          title={data.type}
           optionList={[
             ...Object.keys(dbToTypes[database]).map((value) => ({
               label: value,

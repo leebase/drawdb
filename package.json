@@ -75,10 +75,35 @@
         "to": "THIRD_PARTY_NOTICES.md"
       }
     ],
+    "fileAssociations": [
+      {
+        "ext": "erdproj",
+        "name": "ERD Tool Project",
+        "description": "ERD Tool Project Document",
+        "role": "Editor"
+      }
+    ],
     "mac": {
       "category": "public.app-category.developer-tools",
       "icon": "build/icon.icns",
       "identity": null,
+      "extendInfo": {
+        "UTExportedTypeDeclarations": [
+          {
+            "UTTypeIdentifier": "com.leebase.erdtool.project",
+            "UTTypeDescription": "ERD Tool Project",
+            "UTTypeConformsTo": [
+              "public.data",
+              "public.json"
+            ],
+            "UTTypeTagSpecification": {
+              "public.filename-extension": [
+                "erdproj"
+              ]
+            }
+          }
+        ]
+      },
       "target": [
         {
           "target": "dmg",

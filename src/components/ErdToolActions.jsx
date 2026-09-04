@@ -427,12 +427,49 @@ export default function ErdToolActions({
     }
   };
 
-  const importLiveSnowflakeDiagram = async (diagram) => {
-    if (!(await confirmNativeDocumentReplacement())) return false;
-    return applyDiagram(diagram, {
+  const importLiveSnowflakeDiagram = async (diagram, options = {}) => {
+    const mode = options?.mode || "replace";
+    if (mode === "merge") {
+      const existingNames = new Set(tables.map((t) => t.name.toUpperCase()));
+      const newTables = (diagram.tables || []).filter(
+        (t) => !existingNames.has(t.name.toUpperCase()),
+      );
+      const skippedCount = (diagram.tables || []).length - newTables.length;
+      if (newTables.length === 0) {
+        Toast.warning("All selected tables already exist in the diagram.");
+        return true;
+      }
+      const newTableIds = new Set(newTables.map((t) => t.id));
+      const newRelationships = (diagram.relationships || []).filter(
+        (r) => newTableIds.has(r.startTableId) && newTableIds.has(r.endTableId),
+      );
+      const mergedTables = [...tables, ...newTables];
+      const mergedRelationships = [...relationships, ...newRelationships];
+      const laidOutTables = await layoutDiagram(mergedTables, mergedRelationships);
+      setTables(laidOutTables);
+      setRelationships(mergedRelationships);
+      setSaveState(State.DIRTY);
+      Toast.success(
+        skippedCount > 0
+          ? `Added ${newTables.length} tables (${skippedCount} existing skipped)`
+          : `Added ${newTables.length} tables to diagram`,
+      );
+      window.dispatchEvent(new Event("drawdb:fit-window"));
+      return true;
+    }
+
+    if (tables.length > 0 && !(await confirmNativeDocumentReplacement())) return false;
+    const res = await applyDiagram(diagram, {
       unsaved: true,
       successMessage: "Snowflake schema imported into an editable ERD",
     });
+    if (res !== false) {
+      if ((diagram.relationships || []).length === 0 && (diagram.tables || []).length > 0) {
+        Toast.warning("No key constraints were returned by Snowflake for this schema.");
+      }
+      window.dispatchEvent(new Event("drawdb:fit-window"));
+    }
+    return res;
   };
 
   const reverseEngineerFromConnection = async () => {
@@ -549,7 +586,7 @@ export default function ErdToolActions({
         tabIndex={-1}
       />
       <div
-        className="flex items-center gap-1"
+        className="flex flex-wrap items-center gap-1"
         role="group"
         aria-label="ERD Tool actions"
       >
@@ -557,42 +594,47 @@ export default function ErdToolActions({
           data-testid="erd-new-project"
           size="small"
           type="tertiary"
+          title="New ERD Project"
           disabled={layout.readOnly}
           onClick={newProject}
         >
-          New ERD Project
+          New
         </Button>
         <Button
           data-testid="erd-open-project"
           size="small"
           type="tertiary"
+          title="Open ERD Project"
           disabled={layout.readOnly}
           onClick={openProject}
         >
-          Open ERD Project
+          Open
         </Button>
         {desktopProjectFiles && (
           <Button
             data-testid="erd-save-project-as"
             size="small"
             type="tertiary"
+            title="Save ERD Project As"
             onClick={saveProjectAs}
           >
-            Save ERD Project As
+            Save As
           </Button>
         )}
         <Button
           data-testid="erd-save-project"
           size="small"
           type="tertiary"
+          title="Save ERD Project"
           onClick={saveProject}
         >
-          Save ERD Project
+          Save
         </Button>
         <Button
           data-testid="erd-auto-layout"
           size="small"
           type="tertiary"
+          title="Auto Layout"
           loading={layoutRunning}
           disabled={layout.readOnly || layoutRunning}
           onClick={runAutoLayout}
@@ -603,6 +645,7 @@ export default function ErdToolActions({
           data-testid="erd-show-ddl"
           size="small"
           type="tertiary"
+          title="Snowflake DDL"
           onClick={showDdl}
         >
           Snowflake DDL
@@ -612,10 +655,11 @@ export default function ErdToolActions({
             data-testid="erd-reverse-engineer-snowflake"
             size="small"
             type="primary"
+            title="Reverse Engineer Snowflake"
             disabled={layout.readOnly}
             onClick={() => setSnowflakeVisible(true)}
           >
-            Reverse Engineer Snowflake
+            Reverse Engineer
           </Button>
         )}
       </div>

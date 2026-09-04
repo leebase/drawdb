@@ -5,6 +5,7 @@ import {
   diagramToCanonicalProject,
   parseSnowflakeDDLToCanonicalProject,
   renderCanonicalSnowflakeDDL,
+  renderCanonicalSnowflakeStatements,
   toSnowflakeIdentifier,
 } from "./projectAdapter.js";
 
@@ -2237,6 +2238,39 @@ describe("renderCanonicalSnowflakeDDL", () => {
         },
       }),
     );
+  });
+});
+
+describe("renderCanonicalSnowflakeStatements", () => {
+  it("emits discrete executable statements without empty entries", () => {
+    const stmts = renderCanonicalSnowflakeStatements(twoTableProject());
+    assert.ok(stmts.length >= 3);
+    for (const stmt of stmts) {
+      assert.ok(typeof stmt === "string" && stmt.trim().length > 0);
+      assert.equal(stmt.endsWith(";"), true);
+    }
+    assert.match(stmts[0], /^CREATE DATABASE IF NOT EXISTS ANALYTICS;$/);
+    assert.match(stmts[1], /^CREATE SCHEMA IF NOT EXISTS ANALYTICS\.CORE;$/);
+    assert.match(stmts[2], /^CREATE TABLE IF NOT EXISTS ANALYTICS\.CORE\.CUSTOMER/);
+  });
+
+  it("applies target database and schema overrides across all emitted statements", () => {
+    const stmts = renderCanonicalSnowflakeStatements(twoTableProject(), {
+      databaseOverride: "PROD_DB",
+      schemaOverride: "SALES",
+    });
+    assert.match(stmts[0], /^CREATE DATABASE IF NOT EXISTS PROD_DB;$/);
+    assert.match(stmts[1], /^CREATE SCHEMA IF NOT EXISTS PROD_DB\.SALES;$/);
+    assert.match(stmts[2], /^CREATE TABLE IF NOT EXISTS PROD_DB\.SALES\.CUSTOMER/);
+  });
+
+  it("supports replace: true replacing IF NOT EXISTS semantics", () => {
+    const stmts = renderCanonicalSnowflakeStatements(twoTableProject(), {
+      replace: true,
+    });
+    assert.match(stmts[0], /^CREATE DATABASE IF NOT EXISTS ANALYTICS;$/);
+    assert.match(stmts[1], /^CREATE SCHEMA IF NOT EXISTS ANALYTICS\.CORE;$/);
+    assert.match(stmts[2], /^CREATE OR REPLACE TABLE ANALYTICS\.CORE\.CUSTOMER/);
   });
 });
 

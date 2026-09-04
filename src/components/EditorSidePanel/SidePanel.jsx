@@ -40,22 +40,22 @@ export default function SidePanel({ width, resize, setResize }) {
   const tabList = useMemo(() => {
     const tabs = [
       {
-        tab: `${t("tables")} (${tablesCount})`,
+        tab: `Tables (${tablesCount})`,
         itemKey: Tab.TABLES,
         component: <TablesTab />,
       },
       {
-        tab: `${t("relationships")} (${relationshipsCount})`,
+        tab: `Relations (${relationshipsCount})`,
         itemKey: Tab.RELATIONSHIPS,
         component: <RelationshipsTab />,
       },
       {
-        tab: `${t("subject_areas")} (${areasCount})`,
+        tab: `Areas (${areasCount})`,
         itemKey: Tab.AREAS,
         component: <AreasTab />,
       },
       {
-        tab: `${t("notes")} (${notesCount})`,
+        tab: `Notes (${notesCount})`,
         itemKey: Tab.NOTES,
         component: <NotesTab />,
       },
@@ -111,7 +111,6 @@ export default function SidePanel({ width, resize, setResize }) {
               onChange={(key) =>
                 setSelectedElement((prev) => ({ ...prev, currentTab: key }))
               }
-              collapsible
               tabBarStyle={{ direction: "ltr" }}
             >
               {tabList.length &&

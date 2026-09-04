@@ -3,6 +3,8 @@ import {
   Banner,
   Button,
   Modal,
+  Radio,
+  RadioGroup,
   Select,
   Spin,
   Typography,
@@ -55,6 +57,7 @@ export default function SnowflakeReverseEngineer({
   const [database, setDatabase] = useState("");
   const [schema, setSchema] = useState("");
   const [selectedTables, setSelectedTables] = useState([]);
+  const [importMode, setImportMode] = useState("replace");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
@@ -290,7 +293,7 @@ export default function SnowflakeReverseEngineer({
         title: `${database}.${schema}`,
       });
       diagram.tables = await layoutDiagram(diagram.tables, diagram.relationships);
-      const imported = await onImport(diagram);
+      const imported = await onImport(diagram, { mode: importMode });
       if (imported !== false) await close();
     } catch (importError) {
       setError(
@@ -419,6 +422,20 @@ export default function SnowflakeReverseEngineer({
                   disabled={!database}
                 />
               </label>
+            </div>
+
+            <div className="flex items-center gap-3 text-sm py-1">
+              <span className="font-medium text-gray-700 dark:text-gray-300">
+                Import Mode:
+              </span>
+              <RadioGroup
+                value={importMode}
+                onChange={(e) => setImportMode(e.target.value)}
+                direction="horizontal"
+              >
+                <Radio value="replace">Replace diagram</Radio>
+                <Radio value="merge">Add to diagram</Radio>
+              </RadioGroup>
             </div>
 
             <div className="rounded-md border border-gray-200 dark:border-gray-700">

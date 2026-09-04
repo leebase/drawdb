@@ -46,7 +46,7 @@ function saveRequest(diagram) {
   }
   return {
     contents: `${JSON.stringify(project, null, 2)}\n`,
-    suggestedName: `${basename}.erd.json`,
+    suggestedName: `${basename}.erdproj`,
   };
 }
 
@@ -244,6 +244,14 @@ export async function reverseEngineerDesktopSnowflake(request) {
     throw new Error("Snowflake reverse engineering returned invalid metadata");
   }
   return metadata;
+}
+
+export async function executeDesktopSnowflakeDdl(request) {
+  const result = await requireSnowflakeApi().executeDdl(request);
+  if (!result || typeof result !== "object") {
+    throw new Error("Snowflake DDL execution returned an invalid response");
+  }
+  return result;
 }
 
 export async function exportDesktopSnowflakeDDL(

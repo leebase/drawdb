@@ -21,8 +21,12 @@ const externalUrlPattern =
   /^https:\/\/(?:drawdb-io\.github\.io|github\.com|discord\.gg|x\.com)\//;
 const projectFileFilters = [
   {
-    name: "drawDB ERD projects",
-    extensions: ["erd.json", "json"],
+    name: "ERD Tool projects",
+    extensions: ["erdproj", "erd.json", "json"],
+  },
+  {
+    name: "JSON files",
+    extensions: ["json"],
   },
 ];
 const ddlFileFilters = [{ name: "SQL files", extensions: ["sql"] }];
@@ -286,7 +290,7 @@ async function chooseAndSaveProject(
   request: ProjectSaveRequest,
 ): Promise<{ canceled: true } | { canceled: false; filePath: string }> {
   const result = await dialog.showSaveDialog({
-    title: "Save drawDB ERD Project",
+    title: "Save ERD Tool Project",
     defaultPath: request.suggestedName,
     filters: projectFileFilters,
   });
@@ -307,7 +311,7 @@ function registerProjectFileHandlers(): void {
     assertTrustedProjectSender(event);
     try {
       const result = await dialog.showOpenDialog({
-        title: "Open drawDB ERD Project",
+        title: "Open ERD Tool Project",
         properties: ["openFile"],
         filters: projectFileFilters,
       });
@@ -502,6 +506,18 @@ function registerSnowflakeHandlers(): void {
   ipcMain.handle("snowflake:reverse-engineer", async (event, payload: unknown) => {
     assertTrustedProjectSender(event);
     return await snowflakeService.reverseEngineer(payload);
+  });
+  ipcMain.handle("snowflake:execute-ddl", async (event, payload: unknown) => {
+    assertTrustedProjectSender(event);
+    return await snowflakeService.executeDdl(payload);
+  });
+  ipcMain.handle("desktop:build-info", (event) => {
+    assertTrustedProjectSender(event);
+    return {
+      version: app.getVersion(),
+      gitSha: process.env.VITE_GIT_SHA || "854623a",
+      buildDate: new Date().toISOString(),
+    };
   });
 }
 

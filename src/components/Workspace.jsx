@@ -52,7 +52,7 @@ export const IdContext = createContext({
   setVersion: () => {},
 });
 
-const SIDEPANEL_MIN_WIDTH = 374;
+const SIDEPANEL_MIN_WIDTH = 420;
 
 const MOVE_TO_CLOUD_DISMISSED_KEY = "drawdb:moveToCloudDismissed";
 

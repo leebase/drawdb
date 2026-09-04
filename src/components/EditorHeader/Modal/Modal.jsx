@@ -35,6 +35,8 @@ import Open from "./Open";
 import Rename from "./Rename";
 import SetTableWidth from "./SetTableWidth";
 import Share from "./Share";
+import SnowflakeDeployModal from "../../SnowflakeDeployModal";
+import { hasDesktopSnowflake } from "../../../erdTool/desktopBridge";
 import { mergeCustomTypes } from "../../../utils/customTypes";
 import { openRoute } from "../../../utils/openRoute";
 
@@ -60,12 +62,20 @@ export default function Modal({
   onNativeDdlExport,
 }) {
   const { t, i18n } = useTranslation();
-  const { setTables, setRelationships, database, setDatabase } = useDiagram();
+  const {
+    setTables,
+    setRelationships,
+    database,
+    setDatabase,
+    tables,
+    relationships,
+    targetNamespace,
+  } = useDiagram();
   const { setNotes } = useNotes();
   const { setAreas } = useAreas();
   const { setTypes } = useTypes();
   const { setEnums } = useEnums();
-  const { setTransform } = useTransform();
+  const { transform, setTransform } = useTransform();
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { settings, setSettings } = useSettings();
   const [uncontrolledTitle, setUncontrolledTitle] = useState(title);
@@ -86,6 +96,7 @@ export default function Modal({
   const [selectedDiagramId, setSelectedDiagramId] = useState(0);
   const [saveAsTitle, setSaveAsTitle] = useState(title);
   const [copiedDdl, setCopiedDdl] = useState(false);
+  const [deployVisible, setDeployVisible] = useState(false);
   const navigate = useNavigateWithParams();
 
   useEffect(() => {
@@ -439,13 +450,28 @@ export default function Modal({
       footer={
         modal === MODAL.CODE ? (
           <div className="flex items-center justify-between w-full">
-            <Button
-              icon={copiedDdl ? <IconTick /> : <IconCopy />}
-              onClick={handleCopyDdl}
-              theme="light"
-            >
-              {exportData.extension === "sql" ? "Copy DDL" : t("copy")}
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button
+                data-testid="erd-copy-ddl"
+                icon={copiedDdl ? <IconTick /> : <IconCopy />}
+                onClick={handleCopyDdl}
+                theme="light"
+              >
+                {exportData.extension === "sql" ? "Copy DDL" : t("copy")}
+              </Button>
+              {exportData.extension === "sql" &&
+                database === DB.SNOWFLAKE &&
+                hasDesktopSnowflake() && (
+                  <Button
+                    data-testid="erd-deploy-ddl"
+                    type="primary"
+                    theme="solid"
+                    onClick={() => setDeployVisible(true)}
+                  >
+                    Deploy to Snowflake…
+                  </Button>
+                )}
+            </div>
             <div className="flex gap-2">
               <Button onClick={() => setModal(MODAL.NONE)}>
                 {t("cancel")}
@@ -463,6 +489,20 @@ export default function Modal({
       }
     >
       {getModalBody()}
+      {hasDesktopSnowflake() && (
+        <SnowflakeDeployModal
+          visible={deployVisible}
+          onClose={() => setDeployVisible(false)}
+          diagram={{
+            database: DB.SNOWFLAKE,
+            title,
+            tables,
+            relationships,
+            transform,
+            targetNamespace,
+          }}
+        />
+      )}
     </SemiUIModal>
   );
 }

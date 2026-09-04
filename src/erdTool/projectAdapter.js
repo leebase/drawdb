@@ -2917,3 +2917,66 @@ export function renderCanonicalSnowflakeDDL(projectOrModel) {
 
   return `${lines.join("\n")}\n`;
 }
+
+export function renderCanonicalSnowflakeStatements(
+  projectOrModel,
+  options = {},
+) {
+  let model;
+  if (
+    isPlainObject(projectOrModel) &&
+    "physical_model" in projectOrModel &&
+    "project_version" in projectOrModel
+  ) {
+    model = validatePhysicalModel(projectOrModel.physical_model);
+  } else {
+    model = validatePhysicalModel(projectOrModel);
+  }
+
+  const { databaseOverride, schemaOverride, replace = false } = options;
+  const statements = [];
+  const catalogs = [
+    ...new Set(model.namespaces.map((ns) => databaseOverride || ns.catalog)),
+  ].sort();
+  for (const catalog of catalogs) {
+    statements.push(`CREATE DATABASE IF NOT EXISTS ${catalog};`);
+  }
+  for (const namespace of model.namespaces) {
+    const db = databaseOverride || namespace.catalog;
+    const sch = schemaOverride || namespace.schema;
+    statements.push(`CREATE SCHEMA IF NOT EXISTS ${db}.${sch};`);
+  }
+
+  const ddlTables = model.tables;
+  ddlTables.forEach((table) => {
+    const namespace = namespaceForTable(model, table);
+    const db = databaseOverride || namespace.catalog;
+    const sch = schemaOverride || namespace.schema;
+    const createPrefix = replace
+      ? "CREATE OR REPLACE TABLE"
+      : "CREATE TABLE IF NOT EXISTS";
+    const lines = [`${createPrefix} ${db}.${sch}.${table.name} (`];
+    const bodyLines = [
+      ...table.columns.map((column) => `    ${renderColumn(column)}`),
+      ...table.constraints
+        .filter((constraint) => constraint.kind !== "foreign_key")
+        .map((constraint) => `    ${renderInlineConstraint(constraint, table)}`),
+    ];
+    bodyLines.forEach((bodyLine, bodyIndex) => {
+      const suffix = bodyIndex < bodyLines.length - 1 ? "," : "";
+      lines.push(`${bodyLine}${suffix}`);
+    });
+    if (table.comment !== null) {
+      lines.push(`) COMMENT=${sqlStringLiteral(table.comment)};`);
+    } else {
+      lines.push(");");
+    }
+    statements.push(lines.join("\n"));
+  });
+
+  const fkAlters = foreignKeyAlterStatements(model, ddlTables);
+  statements.push(...fkAlters);
+
+  return statements;
+}
+
