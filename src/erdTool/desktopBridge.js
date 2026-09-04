@@ -425,6 +425,14 @@ export async function openDesktopProject() {
   if (!api) throw new Error("Native project files are unavailable");
   const result = await api.open();
   if (result?.canceled) return result;
+  if (
+    result?.modifiedAt !== undefined &&
+    (typeof result.modifiedAt !== "string" ||
+      !result.modifiedAt ||
+      isNaN(Date.parse(result.modifiedAt)))
+  ) {
+    throw new Error("Project file returned an invalid modification time");
+  }
   return {
     ...result,
     diagram: canonicalProjectToDiagram(JSON.parse(result.contents)),

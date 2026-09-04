@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Button, Modal, TextArea, Toast } from "@douyinfe/semi-ui";
 import { saveAs } from "file-saver";
 import {
@@ -21,6 +21,7 @@ import {
   toSnowflakeIdentifier,
 } from "../erdTool/projectAdapter";
 import { layoutDiagram } from "../erdTool/elkLayout";
+import { diagramRevision, deriveNativeChip } from "../erdTool/documentState";
 import ConnectionProfilesManager from "./ConnectionProfilesManager";
 import SnowflakeReverseEngineer from "./SnowflakeReverseEngineer";
 import {
@@ -51,26 +52,14 @@ const DEFAULT_SELECTED_ELEMENT = {
   openFromToolbar: false,
 };
 
-function diagramRevision(diagram) {
-  return JSON.stringify({
-    database: diagram.database,
-    title: diagram.title,
-    tables: diagram.tables,
-    relationships: diagram.relationships,
-    notes: diagram.notes ?? [],
-    areas: diagram.areas ?? [],
-    types: diagram.types ?? [],
-    enums: diagram.enums ?? [],
-    transform: diagram.transform,
-  });
-}
-
 export default function ErdToolActions({
   title,
   setTitle,
   isNativeDocument,
   onNativeDocumentChange,
   onShowDdl,
+  onNativeChipChange,
+  onNativeSavingChange,
 }) {
   const {
     tables,
@@ -98,6 +87,8 @@ export default function ErdToolActions({
   const [connectionsVisible, setConnectionsVisible] = useState(false);
   const [hasNativeProjectPath, setHasNativeProjectPath] = useState(false);
   const [savedNativeRevision, setSavedNativeRevision] = useState(null);
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const [nativeSaving, setNativeSaving] = useState(false);
   const desktopProjectFiles = hasDesktopProjectFiles();
 
   const currentDiagram = () => ({
@@ -117,6 +108,24 @@ export default function ErdToolActions({
     savedNativeRevision !== null &&
     currentNativeRevision !== savedNativeRevision;
 
+  const nativeChip = useMemo(
+    () =>
+      deriveNativeChip({
+        dirty: nativeDirty,
+        hasPath: hasNativeProjectPath,
+        lastSavedAt,
+      }),
+    [nativeDirty, hasNativeProjectPath, lastSavedAt],
+  );
+
+  useEffect(() => {
+    onNativeChipChange?.(nativeChip);
+  }, [nativeChip, onNativeChipChange]);
+
+  useEffect(() => {
+    onNativeSavingChange?.(nativeSaving);
+  }, [nativeSaving, onNativeSavingChange]);
+
   const readFileAsText = (file) =>
     new Promise((resolve, reject) => {
       const reader = new FileReader();
@@ -128,7 +137,12 @@ export default function ErdToolActions({
 
   const applyDiagram = (
     diagram,
-    { native = false, unsaved = false, successMessage = "ERD project loaded" } = {},
+    {
+      native = false,
+      unsaved = false,
+      modifiedAt = null,
+      successMessage = "ERD project loaded",
+    } = {},
   ) => {
     if (layout.readOnly) {
       Toast.error("Editor is read-only");
@@ -137,10 +151,18 @@ export default function ErdToolActions({
     if (native) {
       onNativeDocumentChange();
       setSavedNativeRevision(diagramRevision(diagram));
+      setLastSavedAt(
+        modifiedAt && !isNaN(new Date(modifiedAt).getTime())
+          ? new Date(modifiedAt)
+          : null,
+      );
     } else if (unsaved && desktopProjectFiles) {
-      onNativeDocumentChange();
-      setSavedNativeRevision(null);
+      if (desktopProjectFiles) {
+        onNativeDocumentChange();
+      }
+      setSavedNativeRevision(diagramRevision(diagram));
       setHasNativeProjectPath(false);
+      setLastSavedAt(null);
     }
     setDatabase(diagram.database ?? DB.SNOWFLAKE);
     setTitle(diagram.title);
@@ -161,7 +183,7 @@ export default function ErdToolActions({
     setBulkSelectedElements([]);
     setUndoStack([]);
     setRedoStack([]);
-    setSaveState(unsaved && desktopProjectFiles ? State.DIRTY : State.SAVED);
+    setSaveState(State.SAVED);
     setOpenVisible(false);
     setProjectText("");
     Toast.success(successMessage);
@@ -196,24 +218,11 @@ export default function ErdToolActions({
     };
     if (desktopProjectFiles) {
       onNativeDocumentChange();
-      setSavedNativeRevision(null);
     }
-    setDatabase(emptyDiagram.database);
-    setTitle(emptyDiagram.title);
-    setTables(emptyDiagram.tables);
-    setRelationships(emptyDiagram.relationships);
-    setTransform(emptyDiagram.transform);
-    setNotes(emptyDiagram.notes);
-    setAreas(emptyDiagram.areas);
-    setTypes(emptyDiagram.types);
-    setEnums(emptyDiagram.enums);
-    setSelectedElement({ ...DEFAULT_SELECTED_ELEMENT });
-    setBulkSelectedElements([]);
-    setUndoStack([]);
-    setRedoStack([]);
-    setHasNativeProjectPath(false);
-    setSaveState(desktopProjectFiles ? State.DIRTY : State.SAVED);
-    Toast.success("New ERD project created");
+    applyDiagram(emptyDiagram, {
+      unsaved: true,
+      successMessage: "New ERD project created",
+    });
   };
 
   const openProject = async () => {
@@ -224,8 +233,15 @@ export default function ErdToolActions({
     if (layout.readOnly) return;
     if (!(await confirmNativeDocumentReplacement())) return;
     try {
+      setNativeSaving(true);
       const result = await openDesktopProject();
-      if (!result?.canceled && applyDiagram(result.diagram, { native: true })) {
+      if (
+        !result?.canceled &&
+        applyDiagram(result.diagram, {
+          native: true,
+          modifiedAt: result.modifiedAt,
+        })
+      ) {
         setHasNativeProjectPath(true);
       }
     } catch (error) {
@@ -234,6 +250,8 @@ export default function ErdToolActions({
       // overwritten by the diagram which remains in the editor.
       setHasNativeProjectPath(false);
       Toast.error(error?.message || "Failed to open ERD project");
+    } finally {
+      setNativeSaving(false);
     }
   };
 
@@ -260,6 +278,7 @@ export default function ErdToolActions({
     const previousSaveState = saveState;
     try {
       if (desktopProjectFiles) {
+        setNativeSaving(true);
         setSaveState(State.SAVING);
         const result = hasNativeProjectPath
           ? await saveDesktopProject(diagram)
@@ -271,6 +290,7 @@ export default function ErdToolActions({
         onNativeDocumentChange();
         setHasNativeProjectPath(true);
         setSavedNativeRevision(revision);
+        setLastSavedAt(new Date());
         setSaveState(State.SAVED);
         Toast.success("ERD project saved");
         return true;
@@ -295,12 +315,16 @@ export default function ErdToolActions({
       }
       Toast.error(error?.message || "Failed to save ERD project");
       return false;
+    } finally {
+      if (desktopProjectFiles) {
+        setNativeSaving(false);
+      }
     }
   };
 
   const confirmNativeDocumentReplacement = async () => {
     if (!desktopProjectFiles || !isNativeDocument) return true;
-    if (savedNativeRevision !== null && !nativeDirty) return true;
+    if (!nativeDirty) return true;
 
     const choice = await confirmDesktopUnsavedChanges({ title });
     if (choice === "save") return await saveProject();
@@ -313,12 +337,14 @@ export default function ErdToolActions({
     const revision = diagramRevision(diagram);
     const previousSaveState = saveState;
     try {
+      setNativeSaving(true);
       setSaveState(State.SAVING);
       const result = await saveDesktopProjectAs(diagram);
       if (!result?.canceled) {
         onNativeDocumentChange();
         setHasNativeProjectPath(true);
         setSavedNativeRevision(revision);
+        setLastSavedAt(new Date());
         setSaveState(State.SAVED);
         Toast.success("ERD project saved");
       } else {
@@ -327,6 +353,8 @@ export default function ErdToolActions({
     } catch (error) {
       setSaveState(State.ERROR);
       Toast.error(error?.message || "Failed to save ERD project");
+    } finally {
+      setNativeSaving(false);
     }
   };
 

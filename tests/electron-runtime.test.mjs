@@ -6,6 +6,7 @@ import path from "node:path";
 import { before, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build as viteBuild } from "vite";
+import "../src/erdTool/documentState.test.js";
 import {
   canonicalProjectToDiagram,
   diagramToCanonicalProject,
@@ -993,7 +994,7 @@ describe("SS-004 native project file bridge contract", () => {
     );
     assert.match(
       actions,
-      /applyDiagram\(result\.diagram, \{ native: true \}\)/,
+      /applyDiagram\(result\.diagram,\s*\{\s*native:\s*true,\s*modifiedAt:\s*result\.modifiedAt,?\s*\}\)/,
     );
     assert.match(actions, /diagramToCanonicalProject\(currentDiagram\(\)\)/);
     assert.match(actions, /setSaveState\(State\.SAVED\)/);
@@ -1138,6 +1139,7 @@ describe("SS-004 native project file bridge contract", () => {
             canceled: false,
             filePath: "/tmp/opened.erd.json",
             contents: `${JSON.stringify(openedProject)}\n`,
+            modifiedAt: "2026-09-03T18:00:00.000Z",
           }),
           save: async (request) => {
             invocations.push({ operation: "save", request });
@@ -1162,7 +1164,9 @@ describe("SS-004 native project file bridge contract", () => {
       assert.equal(diagram.types[0].name, "money");
       assert.equal(diagram.enums[0].name, "status");
       assert.equal(bridge.hasDesktopProjectFiles(), true);
-      assert.deepEqual((await bridge.openDesktopProject()).diagram, diagram);
+      const opened = await bridge.openDesktopProject();
+      assert.deepEqual(opened.diagram, diagram);
+      assert.equal(opened.modifiedAt, "2026-09-03T18:00:00.000Z");
       await bridge.saveDesktopProject(diagram);
       await bridge.saveDesktopProjectAs(diagram);
 
@@ -1193,10 +1197,12 @@ describe("SS-004 native project file bridge contract", () => {
       });
       const result = await getIpcHandler(runtime, "project:open")();
 
+      const stat = fs.statSync(projectPath);
       assert.deepEqual(result, {
         canceled: false,
         filePath: projectPath,
         contents,
+        modifiedAt: stat.mtime.toISOString(),
       });
       assert.equal(runtime.openDialogCalls.length, 1);
       const openOptions = runtime.openDialogCalls[0].at(-1);
@@ -1231,6 +1237,7 @@ describe("SS-004 native project file bridge contract", () => {
       assert.equal(result.canceled, false);
       assert.equal(result.filePath, projectPath);
       assert.deepEqual(JSON.parse(result.contents), project);
+      assert.equal(typeof result.modifiedAt, "string");
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true });
     }
@@ -1280,6 +1287,7 @@ describe("SS-004 native project file bridge contract", () => {
         canceled: false,
         filePath: projectPath,
         contents: updatedContents,
+        modifiedAt: fs.statSync(projectPath).mtime.toISOString(),
       });
       assert.deepEqual(
         JSON.parse(updatedContents),
@@ -1327,6 +1335,7 @@ describe("SS-004 native project file bridge contract", () => {
       });
       const reopened = await getIpcHandler(reader, "project:open")();
       assert.deepEqual(JSON.parse(reopened.contents), project);
+      assert.equal(typeof reopened.modifiedAt, "string");
       assert.deepEqual(
         reader.requiredModules.filter((specifier) =>
           forbiddenStartupModules.includes(specifier),

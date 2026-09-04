@@ -317,9 +317,11 @@ function registerProjectFileHandlers(): void {
       const contents = validateProjectContents(
         fs.readFileSync(filePath, "utf8"),
       );
+      const stat = fs.statSync(filePath);
+      const modifiedAt = stat.mtime.toISOString();
       currentProjectPath = filePath;
       recordRecentProject(filePath);
-      return { canceled: false, filePath, contents };
+      return { canceled: false, filePath, contents, modifiedAt };
     } catch {
       throw projectError("open");
     }

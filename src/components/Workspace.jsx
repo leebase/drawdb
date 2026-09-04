@@ -37,7 +37,10 @@ import { isRtl } from "../i18n/utils/rtl";
 import { useMatch, useParams, useSearchParams } from "react-router-dom";
 import { get, SHARE_FILENAME } from "../api/gists";
 import { mergeCustomTypes } from "../utils/customTypes";
-import { requestDesktopProjectSave } from "../erdTool/desktopBridge";
+import {
+  hasDesktopProjectFiles,
+  requestDesktopProjectSave,
+} from "../erdTool/desktopBridge";
 import ConversationalSchemaAuthoring, {
   ConversationalProposalOverlay,
 } from "./ConversationalSchemaAuthoring";
@@ -488,7 +491,11 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
       return;
 
     if (settings.autosave) {
-      setSaveState(State.SAVING);
+      if (hasDesktopProjectFiles()) {
+        void save();
+      } else {
+        setSaveState(State.SAVING);
+      }
     }
   }, [
     undoStack,
@@ -505,6 +512,7 @@ export default function WorkSpace({ forcedDiagramId } = {}) {
     setSaveState,
     diagramSource,
     saveState,
+    save,
   ]);
 
   useEffect(() => {

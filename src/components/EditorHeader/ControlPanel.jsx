@@ -101,6 +101,7 @@ import {
 } from "../../erdTool/desktopBridge";
 import { diagramToCanonicalProject } from "../../erdTool/projectAdapter";
 import { canonicalProjectToTerraformHcl } from "../../erdTool/terraform";
+import { deriveNativeChip } from "../../erdTool/documentState";
 
 export default function ControlPanel({
   title,
@@ -112,6 +113,11 @@ export default function ControlPanel({
   onNativeDocumentChange,
 }) {
   const { id: diagramId } = useParams();
+
+  const [nativeChip, setNativeChip] = useState(() =>
+    deriveNativeChip({ dirty: false, hasPath: false, lastSavedAt: null }),
+  );
+  const [nativeSaving, setNativeSaving] = useState(false);
 
   const [modal, setModal] = useState(MODAL.NONE);
   const [sidesheet, setSidesheet] = useState(SIDESHEET.NONE);
@@ -1934,6 +1940,8 @@ export default function ControlPanel({
                 isNativeDocument={isNativeDocument}
                 onNativeDocumentChange={onNativeDocumentChange}
                 onShowDdl={exportSnowflakeDdl}
+                onNativeChipChange={setNativeChip}
+                onNativeSavingChange={setNativeSaving}
               />
               {!isTemplate && (
                 <Button
@@ -2157,6 +2165,9 @@ export default function ControlPanel({
   }
 
   function getState() {
+    if (isNativeDocument) {
+      return nativeChip?.label ?? "";
+    }
     switch (saveState) {
       case State.NONE:
         return t("no_changes");
@@ -2368,10 +2379,14 @@ export default function ControlPanel({
                   size="small"
                   type="light"
                   prefixIcon={
-                    saveState === State.LOADING ||
-                    saveState === State.SAVING ? (
-                      <Spin size="small" />
-                    ) : null
+                    isNativeDocument ? (
+                      nativeSaving ? <Spin size="small" /> : null
+                    ) : (
+                      saveState === State.LOADING ||
+                      saveState === State.SAVING ? (
+                        <Spin size="small" />
+                      ) : null
+                    )
                   }
                 >
                   {getState()}
