@@ -220,6 +220,25 @@ describe("SS-014 logical schema proposals", () => {
     );
   });
 
+  it("uses Snowflake family rules for logical proposal types", () => {
+    const alias = proposedModel();
+    alias.tables[0].columns[0].type = "DECIMAL";
+    assert.equal(
+      validateLogicalModel(alias, "snowflake").tables[0].columns[0].type,
+      "NUMBER(38,0)",
+    );
+
+    for (const invalid of ["NUMBER(4,5)", "TIME(10)", "VECTOR", "DATE(1)"]) {
+      const proposal = proposedModel();
+      proposal.tables[0].columns[0].type = invalid;
+      assert.throws(
+        () => validateLogicalModel(proposal, "snowflake"),
+        /invalid|VECTOR|precision|parameters/i,
+        invalid,
+      );
+    }
+  });
+
   it("drops retained indexes or unique constraints when their columns are removed", () => {
     const diagram = snowflakeDiagram();
     diagram.tables[0].indices = [

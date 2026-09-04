@@ -8,6 +8,13 @@ import {
   renderCanonicalSnowflakeStatements,
   toSnowflakeIdentifier,
 } from "./projectAdapter.js";
+import {
+  assertSnowflakeTypeExportable,
+  canonicalizeSnowflakeType,
+  canonicalizeSnowflakeTypeFromField,
+  isIncompleteSnowflakeType,
+  validateSnowflakeType,
+} from "./snowflakeTypeContract.js";
 
 function twoTableProject(overrides = {}) {
   const physical_model = {
@@ -311,7 +318,7 @@ describe("canonicalProjectToDiagram", () => {
       () =>
         canonicalProjectToDiagram({
           ...twoTableProject(),
-          project_version: "2",
+          project_version: "3",
         }),
       /project_version|version/i,
     );
@@ -960,9 +967,9 @@ describe("diagramToCanonicalProject", () => {
       transform: diagram.transform,
     });
 
-    assert.equal(exported.project_version, "1");
+    assert.equal(exported.project_version, "2");
     const model = exported.physical_model;
-    assert.equal(model.model_version, "1");
+    assert.equal(model.model_version, "2");
     assert.ok(model.tables.some((t) => t.id === "table:ANALYTICS.CORE.CLIENT"));
     assert.ok(
       model.tables.some((t) =>
@@ -1416,6 +1423,8 @@ describe("diagramToCanonicalProject", () => {
       precision: 38,
       scale: 0,
       length: null,
+      element_type: null,
+      dimension: null,
     });
     assert.deepEqual(columns[1].data_type, {
       family: "TIMESTAMP_NTZ",
@@ -1423,10 +1432,12 @@ describe("diagramToCanonicalProject", () => {
       precision: 9,
       scale: null,
       length: null,
+      element_type: null,
+      dimension: null,
     });
   });
 
-  it("supports all extended Snowflake data types and unconstrained VARCHAR", () => {
+  it("renders all supported canonical Snowflake data types", () => {
     const testFields = [
       { name: "COL_VARCHAR_UNCONSTRAINED", type: "VARCHAR", size: "" },
       { name: "COL_VARCHAR_SIZED", type: "VARCHAR", size: 100 },
@@ -1438,7 +1449,7 @@ describe("diagramToCanonicalProject", () => {
       { name: "COL_ARRAY", type: "ARRAY" },
       { name: "COL_GEOGRAPHY", type: "GEOGRAPHY" },
       { name: "COL_GEOMETRY", type: "GEOMETRY" },
-      { name: "COL_VECTOR", type: "VECTOR" },
+      { name: "COL_VECTOR", type: "VECTOR", size: "FLOAT,256" },
     ];
 
     const diagram = {
@@ -1471,7 +1482,7 @@ describe("diagramToCanonicalProject", () => {
 
     const exported = diagramToCanonicalProject(diagram);
     const ddl = renderCanonicalSnowflakeDDL(exported);
-    assert.match(ddl, /COL_VARCHAR_UNCONSTRAINED VARCHAR NOT NULL/);
+    assert.match(ddl, /COL_VARCHAR_UNCONSTRAINED VARCHAR\(16777216\) NOT NULL/);
     assert.match(ddl, /COL_VARCHAR_SIZED VARCHAR\(100\)/);
     assert.match(ddl, /COL_TIME TIME\(9\)/);
     assert.match(ddl, /COL_TIMESTAMP_LTZ TIMESTAMP_LTZ\(9\)/);
@@ -1481,10 +1492,12 @@ describe("diagramToCanonicalProject", () => {
     assert.match(ddl, /COL_ARRAY ARRAY/);
     assert.match(ddl, /COL_GEOGRAPHY GEOGRAPHY/);
     assert.match(ddl, /COL_GEOMETRY GEOMETRY/);
-    assert.match(ddl, /COL_VECTOR VECTOR/);
+    assert.match(ddl, /COL_VECTOR VECTOR\(FLOAT, 256\)/);
 
-    const reimported = parseSnowflakeDDLToCanonicalProject(ddl);
-    assert.equal(reimported.physical_model.tables[0].columns.length, 11);
+    assert.throws(
+      () => parseSnowflakeDDLToCanonicalProject(ddl),
+      /Ticket 2A-2|VECTOR/i,
+    );
   });
 
   it("allows the same FK name on different source tables and rejects duplicates on one", () => {
@@ -2742,6 +2755,226 @@ describe("constraint uniqueness and required namespaces", () => {
           transform: { pan: { x: 0, y: 0 }, zoom: 1 },
         }),
       /referenced_columns must have unique ids|unique ids/i,
+    );
+  });
+});
+
+describe("Snowflake type contract", () => {
+  it("normalizes every approved alias into a canonical family", () => {
+    const cases = [
+      [["NUMBER", "DECIMAL", "DEC", "NUMERIC"], "NUMBER", "NUMBER(38, 0)"],
+      [["INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "BYTEINT"], "NUMBER", "NUMBER(38, 0)"],
+      [["FLOAT", "FLOAT4", "FLOAT8", "DOUBLE", "DOUBLE PRECISION", "REAL"], "FLOAT", "FLOAT"],
+      [["VARCHAR", "STRING", "TEXT", "VARCHAR2", "NVARCHAR", "NVARCHAR2", "CHAR VARYING", "NCHAR VARYING"], "VARCHAR", "VARCHAR(16777216)"],
+      [["CHAR", "CHARACTER", "NCHAR"], "VARCHAR", "VARCHAR(1)"],
+      [["BINARY", "VARBINARY"], "BINARY", "BINARY(8388608)"],
+      [["TIMESTAMP_NTZ", "TIMESTAMPNTZ", "TIMESTAMP WITHOUT TIME ZONE", "DATETIME"], "TIMESTAMP_NTZ", "TIMESTAMP_NTZ(9)"],
+      [["TIMESTAMP_LTZ", "TIMESTAMPLTZ", "TIMESTAMP WITH LOCAL TIME ZONE"], "TIMESTAMP_LTZ", "TIMESTAMP_LTZ(9)"],
+      [["TIMESTAMP_TZ", "TIMESTAMPTZ", "TIMESTAMP WITH TIME ZONE"], "TIMESTAMP_TZ", "TIMESTAMP_TZ(9)"],
+    ];
+    for (const [aliases, family, text] of cases) {
+      for (const alias of aliases) {
+        const type = canonicalizeSnowflakeType(alias.toLowerCase());
+        assert.equal(type.family, family, alias);
+        assert.equal(type.text, text, alias);
+        assert.deepEqual(Object.keys(type), [
+          "family",
+          "text",
+          "precision",
+          "scale",
+          "length",
+          "element_type",
+          "dimension",
+        ]);
+        assert.deepEqual(validateSnowflakeType(type), type);
+      }
+    }
+  });
+
+  it("applies documented defaults and accepts each numeric boundary", () => {
+    const cases = [
+      ["NUMBER", "NUMBER(38, 0)"],
+      ["NUMBER(1)", "NUMBER(1, 0)"],
+      ["NUMBER(38,37)", "NUMBER(38, 37)"],
+      ["VARCHAR", "VARCHAR(16777216)"],
+      ["VARCHAR(1)", "VARCHAR(1)"],
+      ["VARCHAR(134217728)", "VARCHAR(134217728)"],
+      ["BINARY", "BINARY(8388608)"],
+      ["BINARY(1)", "BINARY(1)"],
+      ["BINARY(67108864)", "BINARY(67108864)"],
+      ["TIME", "TIME(9)"],
+      ["TIME(0)", "TIME(0)"],
+      ["TIMESTAMP_TZ(9)", "TIMESTAMP_TZ(9)"],
+    ];
+    for (const [input, expected] of cases) {
+      assert.equal(canonicalizeSnowflakeType(input).text, expected, input);
+    }
+  });
+
+  it("fails closed for invalid parameters and context-free TIMESTAMP", () => {
+    for (const input of [
+      "NUMBER(0,0)",
+      "NUMBER(39,0)",
+      "NUMBER(4,-1)",
+      "NUMBER(4,5)",
+      "NUMBER(38,38)",
+      "VARCHAR(0)",
+      "VARCHAR(134217729)",
+      "BINARY(0)",
+      "BINARY(67108865)",
+      "TIME(-1)",
+      "TIME(10)",
+      "DATE(1)",
+      "BOOLEAN(1)",
+      "FLOAT(1)",
+      "VARIANT(1)",
+      "OBJECT(1)",
+      "ARRAY(1)",
+      "GEOGRAPHY(1)",
+      "GEOMETRY(1)",
+      "TIMESTAMP",
+    ]) {
+      assert.throws(() => canonicalizeSnowflakeType(input), undefined, input);
+    }
+    for (const alias of ["INT", "INTEGER", "BIGINT", "SMALLINT", "TINYINT", "BYTEINT"]) {
+      assert.throws(() => canonicalizeSnowflakeType(`${alias}(1)`), /does not accept parameters/, alias);
+    }
+    for (const mapping of ["TIMESTAMP_NTZ", "TIMESTAMP_LTZ", "TIMESTAMP_TZ"]) {
+      assert.equal(
+        canonicalizeSnowflakeType("TIMESTAMP(3)", {
+          timestampTypeMapping: mapping,
+        }).text,
+        `${mapping}(3)`,
+      );
+    }
+  });
+
+  it("keeps VECTOR element type and dimension first-class through editor transport", () => {
+    const type = canonicalizeSnowflakeTypeFromField({
+      type: "VECTOR",
+      size: "FLOAT, 256",
+    });
+    assert.deepEqual(type, {
+      family: "VECTOR",
+      text: "VECTOR(FLOAT, 256)",
+      precision: null,
+      scale: null,
+      length: null,
+      element_type: "FLOAT",
+      dimension: 256,
+    });
+    assert.throws(
+      () => canonicalizeSnowflakeType("VECTOR(INT, 4097)"),
+      /dimension.*4096/i,
+    );
+    for (const invalid of [
+      "VECTOR(NUMBER, 1)",
+      "VECTOR(INT, 0)",
+      "VECTOR(FLOAT, 4097)",
+      "VECTOR(INT)",
+      "VECTOR(INT, 2, 3)",
+    ]) {
+      assert.throws(() => canonicalizeSnowflakeType(invalid), undefined, invalid);
+    }
+    assert.throws(
+      () =>
+        canonicalizeSnowflakeType(
+          { family: "VECTOR", element_type: "NUMBER", dimension: null },
+          { allowIncompleteVector: true },
+        ),
+      /element_type.*INT or FLOAT/i,
+    );
+    assert.throws(
+      () =>
+        canonicalizeSnowflakeType(
+          { family: "VECTOR", element_type: null, dimension: 4097 },
+          { allowIncompleteVector: true },
+        ),
+      /dimension.*4096/i,
+    );
+    assert.throws(
+      () => canonicalizeSnowflakeType("VECTOR"),
+      /bare VECTOR|element.*dimension/i,
+    );
+    assert.throws(
+      () => canonicalizeSnowflakeTypeFromField({ type: "INT", size: "38,0" }),
+      /does not accept parameters/i,
+    );
+  });
+
+  it("loads a v1 bare VECTOR without invention and blocks its export", () => {
+    const legacy = twoTableProject();
+    const order = legacy.physical_model.tables[1];
+    order.columns[0].data_type = {
+      family: "VECTOR",
+      text: "VECTOR",
+      precision: null,
+      scale: null,
+      length: null,
+    };
+    const diagram = canonicalProjectToDiagram(legacy);
+    assert.equal(diagram.tables[1].fields[0].type, "VECTOR");
+    assert.equal(diagram.tables[1].fields[0].size, "");
+    const saved = diagramToCanonicalProject(diagram);
+    assert.equal(saved.project_version, "2");
+    assert.equal(saved.physical_model.model_version, "2");
+    assert.equal(
+      saved.physical_model.tables[1].columns[0].data_type.element_type,
+      null,
+    );
+    assert.equal(
+      saved.physical_model.tables[1].columns[0].data_type.dimension,
+      null,
+    );
+    const incomplete = saved.physical_model.tables[1].columns[0].data_type;
+    assert.equal(isIncompleteSnowflakeType(incomplete), true);
+    assert.throws(() => assertSnowflakeTypeExportable(incomplete), /VECTOR/i);
+    assert.throws(() => renderCanonicalSnowflakeDDL(saved), /VECTOR/i);
+  });
+
+  it("keeps v2 canonical VECTOR parameters authoritative over stale editor data", () => {
+    const legacy = twoTableProject();
+    legacy.physical_model.tables[1].columns[0].data_type = {
+      family: "VECTOR",
+      text: "VECTOR",
+      precision: null,
+      scale: null,
+      length: null,
+    };
+    const diagram = canonicalProjectToDiagram(legacy);
+    diagram.database = "snowflake";
+    diagram.notes = [];
+    diagram.areas = [];
+    diagram.types = [];
+    diagram.enums = [];
+    diagram.tables[1].fields[0].size = "FLOAT,256";
+    const saved = diagramToCanonicalProject(diagram);
+    saved.drawdb_document.tables[1].fields[0].type = "VARCHAR";
+    saved.drawdb_document.tables[1].fields[0].size = "";
+
+    const reopened = canonicalProjectToDiagram(saved);
+    assert.equal(reopened.tables[1].fields[0].type, "VECTOR");
+    assert.equal(reopened.tables[1].fields[0].size, "FLOAT,256");
+  });
+
+  it("derives text and rejects noncanonical seven-key v2 objects", () => {
+    const canonical = canonicalizeSnowflakeType("DECIMAL(12,2)");
+    assert.equal(canonical.text, "NUMBER(12, 2)");
+    assert.throws(
+      () => validateSnowflakeType({ ...canonical, text: "DECIMAL(12,2)" }),
+      /text must equal its canonical value/,
+    );
+    assert.throws(
+      () =>
+        assertSnowflakeTypeExportable({
+          ...canonical,
+          text: "DECIMAL(12,2)",
+        }),
+      /text must equal its canonical value/,
+    );
+    assert.throws(
+      () => validateSnowflakeType({ ...canonical, extra: null }),
+      /exactly the seven canonical fields/,
     );
   });
 });

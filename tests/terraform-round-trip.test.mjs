@@ -906,7 +906,15 @@ describe("SS-015 Terraform round-trip engineering", () => {
       terraformSemanticSnapshot(imported),
     );
     assert.deepEqual(importedAgain.physical_model, imported.physical_model);
-    assert.deepEqual(savedAgain.physical_model, imported.physical_model);
+    const expectedSavedModel = structuredClone(imported.physical_model);
+    expectedSavedModel.model_version = "2";
+    for (const table of expectedSavedModel.tables) {
+      for (const column of table.columns) {
+        column.data_type.element_type = null;
+        column.data_type.dimension = null;
+      }
+    }
+    assert.deepEqual(savedAgain.physical_model, expectedSavedModel);
     assert.equal(diagram.tables.length, 2);
     assert.equal(diagram.relationships.length, 1);
     assertNoSecretMaterial(importedAgain);

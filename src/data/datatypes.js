@@ -14,6 +14,18 @@ import {
   vectorColor,
 } from "./constants.js";
 import { DB } from "./constants.js";
+import {
+  SNOWFLAKE_TYPE_ALIASES,
+  canonicalizeSnowflakeType,
+  snowflakeTypeSize,
+} from "../erdTool/snowflakeTypeContract.js";
+
+const snowflakeDefaultSize = (expression) =>
+  snowflakeTypeSize(
+    canonicalizeSnowflakeType(expression, {
+      allowIncompleteVector: true,
+    }),
+  );
 
 const intRegex = /^-?\d*$/;
 const doubleRegex = /^-?\d*.?\d+$/;
@@ -2254,7 +2266,7 @@ const snowflakeTypesBase = {
     hasCheck: false,
     isSized: false,
     hasPrecision: true,
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("NUMBER"),
     canIncrement: false,
   },
   FLOAT: {
@@ -2280,7 +2292,7 @@ const snowflakeTypesBase = {
     hasCheck: false,
     isSized: true,
     hasPrecision: false,
-    defaultSize: "",
+    defaultSize: snowflakeDefaultSize("VARCHAR"),
     hasQuotes: true,
   },
   DATE: {
@@ -2305,7 +2317,7 @@ const snowflakeTypesBase = {
     hasCheck: false,
     isSized: true,
     hasPrecision: false,
-    defaultSize: 9,
+    defaultSize: snowflakeDefaultSize("TIME"),
     hasQuotes: true,
   },
   TIMESTAMP_NTZ: {
@@ -2328,7 +2340,7 @@ const snowflakeTypesBase = {
     // fractional-second precision, so use the existing single-size control.
     isSized: true,
     hasPrecision: false,
-    defaultSize: 9,
+    defaultSize: snowflakeDefaultSize("TIMESTAMP_NTZ"),
     hasQuotes: true,
   },
   TIMESTAMP_LTZ: {
@@ -2348,7 +2360,7 @@ const snowflakeTypesBase = {
     hasCheck: false,
     isSized: true,
     hasPrecision: false,
-    defaultSize: 9,
+    defaultSize: snowflakeDefaultSize("TIMESTAMP_LTZ"),
     hasQuotes: true,
   },
   TIMESTAMP_TZ: {
@@ -2368,7 +2380,7 @@ const snowflakeTypesBase = {
     hasCheck: false,
     isSized: true,
     hasPrecision: false,
-    defaultSize: 9,
+    defaultSize: snowflakeDefaultSize("TIMESTAMP_TZ"),
     hasQuotes: true,
   },
   BOOLEAN: {
@@ -2399,7 +2411,7 @@ const snowflakeTypesBase = {
     hasCheck: false,
     isSized: true,
     hasPrecision: false,
-    defaultSize: 1,
+    defaultSize: snowflakeDefaultSize("BINARY"),
     hasQuotes: true,
   },
   VARIANT: {
@@ -2452,14 +2464,17 @@ const snowflakeTypesBase = {
     color: vectorColor,
     checkDefault: () => true,
     hasCheck: false,
-    isSized: false,
+    // VECTOR's editor transport is the string "INT,16" or "FLOAT,256";
+    // FieldDetails renders a dedicated text control for it.
+    isSized: true,
     hasPrecision: false,
+    defaultSize: snowflakeDefaultSize("VECTOR"),
     noDefault: true,
   },
   INT: {
     type: "INT",
     canonicalType: "NUMBER",
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("INT"),
     color: intColor,
     checkDefault: (field) => intRegex.test(field.default),
     hasCheck: false,
@@ -2469,7 +2484,7 @@ const snowflakeTypesBase = {
   INTEGER: {
     type: "INTEGER",
     canonicalType: "NUMBER",
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("INTEGER"),
     color: intColor,
     checkDefault: (field) => intRegex.test(field.default),
     hasCheck: false,
@@ -2479,7 +2494,7 @@ const snowflakeTypesBase = {
   BIGINT: {
     type: "BIGINT",
     canonicalType: "NUMBER",
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("BIGINT"),
     color: intColor,
     checkDefault: (field) => intRegex.test(field.default),
     hasCheck: false,
@@ -2489,7 +2504,7 @@ const snowflakeTypesBase = {
   SMALLINT: {
     type: "SMALLINT",
     canonicalType: "NUMBER",
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("SMALLINT"),
     color: intColor,
     checkDefault: (field) => intRegex.test(field.default),
     hasCheck: false,
@@ -2499,7 +2514,7 @@ const snowflakeTypesBase = {
   TINYINT: {
     type: "TINYINT",
     canonicalType: "NUMBER",
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("TINYINT"),
     color: intColor,
     checkDefault: (field) => intRegex.test(field.default),
     hasCheck: false,
@@ -2509,7 +2524,7 @@ const snowflakeTypesBase = {
   BYTEINT: {
     type: "BYTEINT",
     canonicalType: "NUMBER",
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("BYTEINT"),
     color: intColor,
     checkDefault: (field) => intRegex.test(field.default),
     hasCheck: false,
@@ -2519,7 +2534,7 @@ const snowflakeTypesBase = {
   DECIMAL: {
     type: "DECIMAL",
     canonicalType: "NUMBER",
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("DECIMAL"),
     color: decimalColor,
     checkDefault: (field) => doubleRegex.test(field.default),
     hasCheck: false,
@@ -2529,7 +2544,7 @@ const snowflakeTypesBase = {
   NUMERIC: {
     type: "NUMERIC",
     canonicalType: "NUMBER",
-    defaultSize: "38,0",
+    defaultSize: snowflakeDefaultSize("NUMERIC"),
     color: decimalColor,
     checkDefault: (field) => doubleRegex.test(field.default),
     hasCheck: false,
@@ -2557,7 +2572,7 @@ const snowflakeTypesBase = {
   STRING: {
     type: "STRING",
     canonicalType: "VARCHAR",
-    defaultSize: "",
+    defaultSize: snowflakeDefaultSize("STRING"),
     color: stringColor,
     checkDefault: () => true,
     hasCheck: false,
@@ -2568,7 +2583,7 @@ const snowflakeTypesBase = {
   TEXT: {
     type: "TEXT",
     canonicalType: "VARCHAR",
-    defaultSize: "",
+    defaultSize: snowflakeDefaultSize("TEXT"),
     color: stringColor,
     checkDefault: () => true,
     hasCheck: false,
@@ -2579,7 +2594,7 @@ const snowflakeTypesBase = {
   CHAR: {
     type: "CHAR",
     canonicalType: "VARCHAR",
-    defaultSize: "",
+    defaultSize: snowflakeDefaultSize("CHAR"),
     color: stringColor,
     checkDefault: () => true,
     hasCheck: false,
@@ -2590,18 +2605,7 @@ const snowflakeTypesBase = {
   DATETIME: {
     type: "DATETIME",
     canonicalType: "TIMESTAMP_NTZ",
-    defaultSize: 9,
-    color: dateColor,
-    checkDefault: () => true,
-    hasCheck: false,
-    isSized: true,
-    hasPrecision: false,
-    hasQuotes: true,
-  },
-  TIMESTAMP: {
-    type: "TIMESTAMP",
-    canonicalType: "TIMESTAMP_NTZ",
-    defaultSize: 9,
+    defaultSize: snowflakeDefaultSize("DATETIME"),
     color: dateColor,
     checkDefault: () => true,
     hasCheck: false,
@@ -2610,6 +2614,23 @@ const snowflakeTypesBase = {
     hasQuotes: true,
   },
 };
+
+// Keep the editor registry aligned with the pure semantic contract.  Aliases
+// are useful at the input boundary, but TableField stores the canonical family
+// selected by `canonicalType`.
+for (const [alias, family] of Object.entries(SNOWFLAKE_TYPE_ALIASES)) {
+  if (alias === "TIMESTAMP") continue;
+  if (snowflakeTypesBase[alias]) continue;
+  const source = snowflakeTypesBase[family];
+  if (!source) continue;
+  const defaultSize = snowflakeDefaultSize(alias);
+  snowflakeTypesBase[alias] = {
+    ...source,
+    type: alias,
+    ...(family !== alias ? { canonicalType: family } : {}),
+    ...(defaultSize !== undefined ? { defaultSize } : {}),
+  };
+}
 
 export const snowflakeTypes = new Proxy(snowflakeTypesBase, {
   get: (target, prop) => (prop in target ? target[prop] : false),

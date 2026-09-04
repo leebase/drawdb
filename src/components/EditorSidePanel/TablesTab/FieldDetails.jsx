@@ -13,12 +13,29 @@ import { useDiagram, useLayout, useUndoRedo } from "../../../hooks";
 import { useTranslation } from "react-i18next";
 import { databases } from "../../../data/databases";
 import { resolveType } from "../../../utils/customTypes";
+import { canonicalizeSnowflakeTypeFromField } from "../../../erdTool/snowflakeTypeContract";
+
+function vectorSizeIsValid(size) {
+  if (size === undefined || size === null || String(size).trim() === "") {
+    return false;
+  }
+  try {
+    canonicalizeSnowflakeTypeFromField(
+      { type: "VECTOR", size },
+      { allowIncompleteVector: false },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 export default function FieldDetails({ data, tid }) {
   const { t } = useTranslation();
   const { layout } = useLayout();
   const { tables, database } = useDiagram();
   const resolved = resolveType(database, data.type);
+  const isSnowflakeVector = database === DB.SNOWFLAKE && data.type === "VECTOR";
   const { setUndoStack, setRedoStack } = useUndoRedo();
   const { updateField, deleteField } = useDiagram();
   const [editField, setEditField] = useState({});
@@ -101,7 +118,45 @@ export default function FieldDetails({ data, tid }) {
           />
         </>
       )}
-      {resolved.isSized && (
+      {isSnowflakeVector && (
+        <>
+          <div className="font-semibold">VECTOR element, dimension</div>
+          <Input
+            className="my-2 w-full"
+            placeholder="FLOAT,256 or INT,16"
+            value={data.size ?? ""}
+            validateStatus={vectorSizeIsValid(data.size) ? "default" : "error"}
+            readonly={layout.readOnly}
+            onChange={(value) => updateField(tid, data.id, { size: value })}
+            onFocus={(e) => setEditField({ size: e.target.value })}
+            onBlur={(e) => {
+              if (e.target.value === editField.size) return;
+              setUndoStack((prev) => [
+                ...prev,
+                {
+                  action: Action.EDIT,
+                  element: ObjectType.TABLE,
+                  component: "field",
+                  tid: tid,
+                  fid: data.id,
+                  undo: editField,
+                  redo: { size: e.target.value },
+                  message: t("edit_table", {
+                    tableName: table.name,
+                    extra: "[field]",
+                  }),
+                },
+              ]);
+              setRedoStack([]);
+            }}
+          />
+          <div className="text-xs mt-1">
+            Required for Snowflake export: INT or FLOAT and a dimension from 1
+            to 4096.
+          </div>
+        </>
+      )}
+      {resolved.isSized && !isSnowflakeVector && (
         <>
           <div className="font-semibold">{t("size")}</div>
           <InputNumber

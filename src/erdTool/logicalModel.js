@@ -1,5 +1,6 @@
 import { dbToTypes } from "../data/datatypes.js";
 import { Cardinality, DB, defaultBlue } from "../data/constants.js";
+import { canonicalizeSnowflakeType } from "./snowflakeTypeContract.js";
 
 const MAX_TABLES = 200;
 const MAX_COLUMNS_PER_TABLE = 300;
@@ -90,6 +91,20 @@ function booleanValue(value, label) {
 
 function supportedType(value, database, label) {
   const text = stringValue(value, label, { max: 120 }).toUpperCase();
+  if (database === DB.SNOWFLAKE) {
+    try {
+      const canonical = canonicalizeSnowflakeType(text, { label });
+      // Logical proposals retain their compact historical text transport;
+      // semantic validation and canonical family/parameters come from the
+      // shared Snowflake contract above.
+      return canonical.text.replace(/,\s+/g, ",");
+    } catch (error) {
+      if (/unsupported type family/.test(error.message)) {
+        fail(`${label} uses unsupported ${database} type ${text.split("(")[0]}`);
+      }
+      fail(`${label} is invalid: ${error.message}`);
+    }
+  }
   const match = /^([A-Z][A-Z0-9_]*)(?:\(\s*([0-9]+(?:\s*,\s*[0-9]+)?)\s*\))?$/.exec(
     text,
   );
@@ -265,7 +280,7 @@ export function validateLogicalModel(value, database = DB.SNOWFLAKE) {
 
 function typeText(field) {
   const family = String(field.type || "").toUpperCase();
-  const size = String(field.size || "").trim();
+  const size = String(field.size ?? "").trim();
   return size ? `${family}(${size.replace(/\s+/g, "")})` : family;
 }
 

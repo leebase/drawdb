@@ -622,7 +622,16 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
     );
 
     const { drawdb_document, ...savedCanonicalProjection } = savedProject;
-    assert.deepEqual(savedCanonicalProjection, expectedCanonicalProject());
+    const expectedV2 = expectedCanonicalProject();
+    expectedV2.project_version = "2";
+    expectedV2.physical_model.model_version = "2";
+    for (const table of expectedV2.physical_model.tables) {
+      for (const column of table.columns) {
+        column.data_type.element_type = null;
+        column.data_type.dimension = null;
+      }
+    }
+    assert.deepEqual(savedCanonicalProjection, expectedV2);
     assert.equal(drawdb_document.database, "snowflake");
     assert.equal(drawdb_document.title, "mocked-snowflake-metadata");
     assert.deepEqual(

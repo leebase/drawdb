@@ -1,5 +1,14 @@
-const PROJECT_VERSION = "1";
-const MODEL_VERSION = "1";
+import {
+  canonicalizeSnowflakeType,
+  canonicalizeSnowflakeTypeFromField,
+  fieldSizeFromSnowflakeType,
+  validateSnowflakeType,
+} from "./snowflakeTypeContract.js";
+
+const PROJECT_VERSION = "2";
+const MODEL_VERSION = "2";
+const LEGACY_PROJECT_VERSION = "1";
+const LEGACY_MODEL_VERSION = "1";
 const SNOWFLAKE_IDENTIFIER_MAX_LENGTH = 255;
 const SENSITIVE_PROJECT_KEY =
   /credential|password|passphrase|secret|token|connection|account|warehouse|role|session|api[_-]?key|private[_-]?key|access[_-]?key|auth(?:entication)?/i;
@@ -57,7 +66,7 @@ const COLUMN_KEYS = new Set([
   "default",
   "comment",
 ]);
-const DATA_TYPE_KEYS = new Set([
+const LEGACY_DATA_TYPE_KEYS = new Set([
   "family",
   "text",
   "precision",
@@ -188,25 +197,6 @@ const FORBIDDEN_KEYS = new Set([
   "x",
   "y",
   "zoom",
-]);
-
-const SUPPORTED_TYPE_FAMILIES = new Set([
-  "NUMBER",
-  "FLOAT",
-  "VARCHAR",
-  "DATE",
-  "TIME",
-  "TIMESTAMP_NTZ",
-  "TIMESTAMP_LTZ",
-  "TIMESTAMP_TZ",
-  "BOOLEAN",
-  "BINARY",
-  "VARIANT",
-  "OBJECT",
-  "ARRAY",
-  "GEOGRAPHY",
-  "GEOMETRY",
-  "VECTOR",
 ]);
 
 const FALLBACK_X_STEP = 280;
@@ -390,13 +380,6 @@ function requireInt(value, label) {
     fail(`${label} must be an integer`);
   }
   return value;
-}
-
-function requireOptionalInt(value, label) {
-  if (value === null) {
-    return null;
-  }
-  return requireInt(value, label);
 }
 
 function requireFiniteNumber(value, label) {
@@ -774,217 +757,43 @@ export function toSnowflakeIdentifier(value, label = "identifier") {
   return normalized;
 }
 
-function canonicalTypeText(family, { precision, scale, length }) {
-  switch (family) {
-    case "NUMBER":
-      return `NUMBER(${precision}, ${scale})`;
-    case "VARCHAR":
-      return length === null ? "VARCHAR" : `VARCHAR(${length})`;
-    case "DATE":
-      return "DATE";
-    case "TIME":
-    case "TIMESTAMP_NTZ":
-    case "TIMESTAMP_LTZ":
-    case "TIMESTAMP_TZ":
-      return `${family}(${precision})`;
-    case "BOOLEAN":
-      return "BOOLEAN";
-    case "FLOAT":
-      return "FLOAT";
-    case "BINARY":
-      return `BINARY(${length})`;
-    case "VARIANT":
-    case "OBJECT":
-    case "ARRAY":
-    case "GEOGRAPHY":
-    case "GEOMETRY":
-    case "VECTOR":
-      return family;
-    default:
-      fail(`unsupported type family ${family}`);
-  }
-}
-
-function assertTypeBounds(family, { precision, scale, length }, label) {
-  if (family === "NUMBER") {
-    if (precision === null) {
-      fail(`${label}: precision is required for NUMBER`);
-    }
-    if (scale === null) {
-      fail(`${label}: scale is required for NUMBER`);
-    }
-    if (length !== null) {
-      fail(`${label}: length must be null for NUMBER`);
-    }
-    if (precision < 1 || precision > 38) {
-      fail(`${label}: precision must be between 1 and 38 for NUMBER`);
-    }
-    const maxScale = Math.min(37, precision);
-    if (scale < 0 || scale > maxScale) {
-      fail(`${label}: scale must be between 0 and ${maxScale} for NUMBER`);
-    }
-  } else if (family === "VARCHAR") {
-    if (precision !== null || scale !== null) {
-      fail(`${label}: precision and scale must be null for VARCHAR`);
-    }
-    if (length !== null && (length < 1 || length > 16777216)) {
-      fail(`${label}: length must be between 1 and 16777216 for VARCHAR`);
-    }
-  } else if (
-    family === "TIMESTAMP_NTZ" ||
-    family === "TIMESTAMP_LTZ" ||
-    family === "TIMESTAMP_TZ" ||
-    family === "TIME"
-  ) {
-    if (precision === null) {
-      fail(`${label}: precision is required for ${family}`);
-    }
-    if (scale !== null || length !== null) {
-      fail(`${label}: scale and length must be null for ${family}`);
-    }
-    if (precision < 0 || precision > 9) {
-      fail(`${label}: precision must be between 0 and 9 for ${family}`);
-    }
-  } else if (family === "BINARY") {
-    if (length === null) {
-      fail(`${label}: length is required for BINARY`);
-    }
-    if (precision !== null || scale !== null) {
-      fail(`${label}: precision and scale must be null for BINARY`);
-    }
-    if (length < 1 || length > 8388608) {
-      fail(`${label}: length must be between 1 and 8388608 for BINARY`);
-    }
-  } else if (
-    family === "DATE" ||
-    family === "BOOLEAN" ||
-    family === "FLOAT" ||
-    family === "VARIANT" ||
-    family === "OBJECT" ||
-    family === "ARRAY" ||
-    family === "GEOGRAPHY" ||
-    family === "GEOMETRY" ||
-    family === "VECTOR"
-  ) {
-    if (precision !== null || scale !== null || length !== null) {
-      fail(`${label}: precision, scale, and length must be null for ${family}`);
-    }
-  }
-}
-
-function validateDataType(dataType, label) {
+function validateDataType(
+  dataType,
+  label,
+  { legacy = false, allowIncompleteVector = false } = {},
+) {
   requireObject(dataType, label);
-  requireExactKeys(dataType, DATA_TYPE_KEYS, label);
-  const family = requireNonblankString(
-    dataType.family,
-    `${label}.family`,
-  ).toUpperCase();
-  if (!SUPPORTED_TYPE_FAMILIES.has(family)) {
-    fail(`unsupported type family ${family}`);
+  if (legacy) {
+    const legacyKeys = new Set(Object.keys(dataType));
+    for (const key of legacyKeys) {
+      if (!LEGACY_DATA_TYPE_KEYS.has(key)) {
+        fail(`${label} has unexpected field ${key}`);
+      }
+    }
+    for (const key of LEGACY_DATA_TYPE_KEYS) {
+      if (!(key in dataType)) fail(`${label} is missing required ${key}`);
+    }
+    return canonicalizeSnowflakeType(dataType, {
+      allowIncompleteVector,
+      label: `${label} legacy`,
+    });
   }
-  const precision = requireOptionalInt(
-    dataType.precision,
-    `${label}.precision`,
-  );
-  const scale = requireOptionalInt(dataType.scale, `${label}.scale`);
-  const length = requireOptionalInt(dataType.length, `${label}.length`);
-  assertTypeBounds(family, { precision, scale, length }, label);
-  const text = requireNonblankString(dataType.text, `${label}.text`);
-  const expected = canonicalTypeText(family, { precision, scale, length });
-  if (text !== expected) {
-    fail(`${label}.text must equal ${JSON.stringify(expected)}`);
-  }
-  return { family, text, precision, scale, length };
+  return validateSnowflakeType(dataType, {
+    allowIncompleteVector,
+    label,
+  });
 }
 
 function fieldSizeFromDataType(dataType) {
-  if (dataType.family === "NUMBER") {
-    return `${dataType.precision},${dataType.scale}`;
-  }
-  if (dataType.family === "VARCHAR") {
-    return dataType.length === null ? "" : dataType.length;
-  }
-  if (dataType.family === "BINARY") {
-    return dataType.length;
-  }
-  if (
-    dataType.family === "TIMESTAMP_NTZ" ||
-    dataType.family === "TIMESTAMP_LTZ" ||
-    dataType.family === "TIMESTAMP_TZ" ||
-    dataType.family === "TIME"
-  ) {
-    return dataType.precision;
-  }
-  return undefined;
+  return fieldSizeFromSnowflakeType(dataType);
 }
 
 function dataTypeFromField(field) {
-  const family = requireNonblankString(field.type, "field.type").toUpperCase();
-  if (!SUPPORTED_TYPE_FAMILIES.has(family)) {
-    fail(`unsupported field type ${family}`);
-  }
-  let precision = null;
-  let scale = null;
-  let length = null;
-  const size = field.size;
   const label = `field ${field.name}`;
-
-  if (family === "NUMBER") {
-    if (size === undefined || size === null || size === "") {
-      fail(`NUMBER field ${field.name} requires size`);
-    }
-    const parts = String(size)
-      .split(",")
-      .map((part) => part.trim());
-    if (
-      parts.length !== 2 ||
-      parts.some((part) => part === "" || Number.isNaN(Number(part)))
-    ) {
-      fail(
-        `NUMBER field ${field.name} has malformed size ${JSON.stringify(size)}`,
-      );
-    }
-    precision = Number(parts[0]);
-    scale = Number(parts[1]);
-    if (!Number.isInteger(precision) || !Number.isInteger(scale)) {
-      fail(`NUMBER field ${field.name} size must be integers`);
-    }
-  } else if (family === "VARCHAR") {
-    if (size !== undefined && size !== null && size !== "") {
-      length = Number(size);
-      if (!Number.isInteger(length)) {
-        fail(`VARCHAR field ${field.name} size must be an integer`);
-      }
-    }
-  } else if (family === "BINARY") {
-    if (size === undefined || size === null || size === "") {
-      fail(`BINARY field ${field.name} requires size`);
-    }
-    length = Number(size);
-    if (!Number.isInteger(length)) {
-      fail(`BINARY field ${field.name} size must be an integer`);
-    }
-  } else if (
-    family === "TIMESTAMP_NTZ" ||
-    family === "TIMESTAMP_LTZ" ||
-    family === "TIMESTAMP_TZ" ||
-    family === "TIME"
-  ) {
-    if (size === undefined || size === null || size === "") {
-      precision = 9;
-    } else {
-      precision = Number(size);
-      if (!Number.isInteger(precision)) {
-        fail(`${family} field ${field.name} size must be an integer`);
-      }
-    }
-  } else if (size !== undefined && size !== null && size !== "") {
-    fail(`${family} field ${field.name} must remain parameterless`);
-  }
-
-  assertTypeBounds(family, { precision, scale, length }, label);
-  const text = canonicalTypeText(family, { precision, scale, length });
-  return { family, text, precision, scale, length };
+  return canonicalizeSnowflakeTypeFromField(field, {
+    allowIncompleteVector: true,
+    label,
+  });
 }
 
 function sortById(items) {
@@ -1147,7 +956,94 @@ function validateDrawdbDocument(document) {
   );
 }
 
-function validatePhysicalModel(model) {
+function reconcileCanonicalTypesIntoDrawdbDocument(document, model) {
+  if (document.database !== "snowflake") return document;
+  if (document.tables.length !== model.tables.length) {
+    fail("drawdb_document tables are inconsistent with physical_model");
+  }
+  const namespaceById = new Map(model.namespaces.map((ns) => [ns.id, ns]));
+  const tableById = new Map(model.tables.map((table) => [table.id, table]));
+  const seenTableIds = new Set();
+
+  return {
+    ...document,
+    tables: document.tables.map((table) => {
+      const namespace = isPlainObject(table.namespace)
+        ? {
+            catalog: toSnowflakeIdentifier(table.namespace.catalog, "catalog"),
+            schema: toSnowflakeIdentifier(table.namespace.schema, "schema"),
+          }
+        : { catalog: "MODEL", schema: "PUBLIC" };
+      const canonicalTableId = tableId(
+        namespace.catalog,
+        namespace.schema,
+        toSnowflakeIdentifier(table.name, "table"),
+      );
+      const canonicalTable = tableById.get(canonicalTableId);
+      if (!canonicalTable) {
+        fail(
+          `drawdb_document table ${JSON.stringify(table.name)} is inconsistent with physical_model`,
+        );
+      }
+      if (seenTableIds.has(canonicalTableId)) {
+        fail("drawdb_document table mapping is not unique");
+      }
+      seenTableIds.add(canonicalTableId);
+      const canonicalNamespace = namespaceById.get(
+        canonicalTable.namespace_id,
+      );
+      if (
+        !canonicalNamespace ||
+        canonicalNamespace.catalog !== namespace.catalog ||
+        canonicalNamespace.schema !== namespace.schema
+      ) {
+        fail(
+          `drawdb_document namespace for ${JSON.stringify(table.name)} is inconsistent with physical_model`,
+        );
+      }
+      const columnById = new Map(
+        canonicalTable.columns.map((column) => [column.id, column]),
+      );
+      if (table.fields.length !== canonicalTable.columns.length) {
+        fail(
+          `drawdb_document columns for ${JSON.stringify(table.name)} are inconsistent with physical_model`,
+        );
+      }
+      const seenColumnIds = new Set();
+      return {
+        ...table,
+        fields: table.fields.map((field) => {
+          const canonicalColumnId = columnId(
+            namespace.catalog,
+            namespace.schema,
+            canonicalTable.name,
+            toSnowflakeIdentifier(field.name, "column"),
+          );
+          const canonicalColumn = columnById.get(canonicalColumnId);
+          if (!canonicalColumn) {
+            fail(
+              `drawdb_document column ${JSON.stringify(field.name)} is inconsistent with physical_model`,
+            );
+          }
+          if (seenColumnIds.has(canonicalColumnId)) {
+            fail("drawdb_document column mapping is not unique");
+          }
+          seenColumnIds.add(canonicalColumnId);
+          const reconciled = {
+            ...field,
+            type: canonicalColumn.data_type.family,
+          };
+          const size = fieldSizeFromDataType(canonicalColumn.data_type);
+          if (size === undefined) delete reconciled.size;
+          else reconciled.size = size;
+          return reconciled;
+        }),
+      };
+    }),
+  };
+}
+
+function validatePhysicalModel(model, { allowIncompleteVector = false } = {}) {
   requireObject(model, "physical_model");
   requireExactKeys(model, PHYSICAL_MODEL_KEYS, "physical model");
   assertNoForbiddenKeys(model, "physical_model");
@@ -1156,9 +1052,9 @@ function validatePhysicalModel(model) {
     model.model_version,
     "model_version",
   );
-  if (modelVersion !== MODEL_VERSION) {
+  if (modelVersion !== MODEL_VERSION && modelVersion !== LEGACY_MODEL_VERSION) {
     fail(
-      `Unsupported model_version ${JSON.stringify(modelVersion)}; expected "1"`,
+      `Unsupported model_version ${JSON.stringify(modelVersion)}; expected "1" or "2"`,
     );
   }
   const name = requireNonblankString(model.name, "name");
@@ -1201,7 +1097,10 @@ function validatePhysicalModel(model) {
           id: requireNonblankString(column.id, "id"),
           name: requireLegalSnowflakeIdentifier(column.name, "name"),
           ordinal: requireInt(column.ordinal, "ordinal"),
-          data_type: validateDataType(column.data_type, "data_type"),
+          data_type: validateDataType(column.data_type, "data_type", {
+            legacy: modelVersion === LEGACY_MODEL_VERSION,
+            allowIncompleteVector,
+          }),
           nullable: requireBoolean(column.nullable, "nullable"),
           default: requireOptionalString(column.default, "default"),
           comment: requireOptionalString(column.comment, "comment"),
@@ -1476,7 +1375,7 @@ function validatePhysicalModel(model) {
   }
 
   return {
-    model_version: modelVersion,
+    model_version: MODEL_VERSION,
     name,
     namespaces,
     tables,
@@ -1500,17 +1399,26 @@ export function canonicalProjectToDiagram(project) {
   if (!("project_version" in project) || !("physical_model" in project)) {
     fail("project is missing required project_version or physical_model");
   }
-  if (project.project_version !== PROJECT_VERSION) {
+  if (
+    project.project_version !== PROJECT_VERSION &&
+    project.project_version !== LEGACY_PROJECT_VERSION
+  ) {
     fail(
-      `Unsupported project_version ${JSON.stringify(project.project_version)}; expected "1"`,
+      `Unsupported project_version ${JSON.stringify(project.project_version)}; expected "1" or "2"`,
     );
   }
 
-  const model = validatePhysicalModel(project.physical_model);
+  const model = validatePhysicalModel(project.physical_model, {
+    allowIncompleteVector: true,
+  });
   const tableIds = new Set(model.tables.map((t) => t.id));
   const layout = parseDiagramLayout(project.diagram_layout, tableIds);
-  if (project.drawdb_document !== undefined) {
-    return validateDrawdbDocument(project.drawdb_document);
+  const drawdbDocument =
+    project.drawdb_document === undefined
+      ? null
+      : validateDrawdbDocument(project.drawdb_document);
+  if (drawdbDocument && project.project_version === LEGACY_PROJECT_VERSION) {
+    return drawdbDocument;
   }
   const namespaceById = new Map(model.namespaces.map((ns) => [ns.id, ns]));
 
@@ -1614,7 +1522,7 @@ export function canonicalProjectToDiagram(project) {
     };
   });
 
-  return {
+  const canonicalDiagram = {
     title: model.name,
     tables,
     relationships,
@@ -1623,6 +1531,9 @@ export function canonicalProjectToDiagram(project) {
       zoom: layout.viewport.zoom,
     },
   };
+  return drawdbDocument
+    ? reconcileCanonicalTypesIntoDrawdbDocument(drawdbDocument, model)
+    : canonicalDiagram;
 }
 
 function claimUniqueName(seen, value, label) {
@@ -2128,7 +2039,7 @@ export function diagramToCanonicalProject({
   };
 
   assertNoForbiddenKeys(physical_model, "physical_model");
-  validatePhysicalModel(physical_model);
+  validatePhysicalModel(physical_model, { allowIncompleteVector: true });
 
   const project = {
     project_version: PROJECT_VERSION,
@@ -2381,37 +2292,22 @@ function parseSnowflakeDataType(value) {
     match[2] === undefined
       ? []
       : match[2].split(",").map((arg) => arg.trim());
-  let precision = null;
-  let scale = null;
-  let length = null;
+
+  // Ticket 2A-1 changes the canonical representation, not the DDL grammar.
+  // Retain the existing parser surface until the dedicated 2A-2 boundary work.
   if (family === "NUMBER") {
     if (args.length !== 2) fail("NUMBER requires precision and scale");
-    precision = Number(args[0]);
-    scale = Number(args[1]);
   } else if (family === "VARCHAR") {
-    if (args.length === 1) {
-      length = Number(args[0]);
-    } else if (args.length === 0) {
-      length = null;
-    } else {
-      fail("VARCHAR accepts at most 1 argument");
-    }
+    if (args.length > 1) fail("VARCHAR accepts at most 1 argument");
   } else if (family === "BINARY") {
     if (args.length !== 1) fail("BINARY requires length");
-    length = Number(args[0]);
   } else if (
     family === "TIMESTAMP_NTZ" ||
     family === "TIMESTAMP_LTZ" ||
     family === "TIMESTAMP_TZ" ||
     family === "TIME"
   ) {
-    if (args.length === 1) {
-      precision = Number(args[0]);
-    } else if (args.length === 0) {
-      precision = 9;
-    } else {
-      fail(`${family} accepts at most 1 argument`);
-    }
+    if (args.length > 1) fail(`${family} accepts at most 1 argument`);
   } else if (
     family === "DATE" ||
     family === "BOOLEAN" ||
@@ -2420,28 +2316,18 @@ function parseSnowflakeDataType(value) {
     family === "OBJECT" ||
     family === "ARRAY" ||
     family === "GEOGRAPHY" ||
-    family === "GEOMETRY" ||
-    family === "VECTOR"
+    family === "GEOMETRY"
   ) {
     if (args.length !== 0) fail(`${family} does not support parameters`);
+  } else if (family === "VECTOR") {
+    fail("VECTOR DDL parsing is deferred to Ticket 2A-2");
   } else {
     fail(`unsupported type family ${family}`);
   }
-  if (
-    (precision !== null && !Number.isInteger(precision)) ||
-    (scale !== null && !Number.isInteger(scale)) ||
-    (length !== null && !Number.isInteger(length))
-  ) {
-    fail(`unsupported Snowflake data type ${value}`);
-  }
-  assertTypeBounds(family, { precision, scale, length }, `data type ${family}`);
-  return {
-    family,
-    text: canonicalTypeText(family, { precision, scale, length }),
-    precision,
-    scale,
-    length,
-  };
+
+  return canonicalizeSnowflakeType(value, {
+    label: `data type ${String(value).trim()}`,
+  });
 }
 
 function isSnowflakeWordBoundary(value, index) {
@@ -2979,4 +2865,3 @@ export function renderCanonicalSnowflakeStatements(
 
   return statements;
 }
-

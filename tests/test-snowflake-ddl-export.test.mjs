@@ -38,6 +38,14 @@ const exportModalPath = path.join(
   "Modal",
   "Modal.jsx",
 );
+const fieldDetailsPath = path.join(
+  repositoryRoot,
+  "src",
+  "components",
+  "EditorSidePanel",
+  "TablesTab",
+  "FieldDetails.jsx",
+);
 
 // Static model fixture: using JSON text ensures each test gets an independent,
 // serializable diagram equivalent to one loaded from an offline project file.
@@ -352,6 +360,26 @@ describe("SS-005 Snowflake DDL export", () => {
     assert.equal(snowflakeTypes.TIMESTAMP_NTZ.defaultSize, 9);
   });
 
+  it("exposes a bounded VECTOR editor transport without inventing defaults", () => {
+    assert.equal(snowflakeTypes.VECTOR.isSized, true);
+    assert.equal(snowflakeTypes.VECTOR.defaultSize, "");
+    const source = fs.readFileSync(fieldDetailsPath, "utf8");
+    assert.match(source, /VECTOR element, dimension/);
+    assert.match(source, /FLOAT,256 or INT,16/);
+    assert.match(source, /dimension from 1[\s\S]*to 4096/);
+    assert.match(source, /canonicalizeSnowflakeTypeFromField/);
+  });
+
+  it("derives editor alias defaults from the shared type contract", () => {
+    assert.equal(snowflakeTypes.CHARACTER.canonicalType, "VARCHAR");
+    assert.equal(snowflakeTypes.CHARACTER.defaultSize, 1);
+    assert.equal(snowflakeTypes["NCHAR VARYING"].canonicalType, "VARCHAR");
+    assert.equal(snowflakeTypes["NCHAR VARYING"].defaultSize, 16777216);
+    assert.equal(snowflakeTypes.VARBINARY.canonicalType, "BINARY");
+    assert.equal(snowflakeTypes.VARBINARY.defaultSize, 8388608);
+    assert.equal(snowflakeTypes.TIMESTAMP, false);
+  });
+
   it("renders deterministic fixture-backed Snowflake DDL through drawDB's export selection", () => {
     const diagram = snowflakeDiagramFixture();
 
@@ -447,7 +475,7 @@ describe("SS-005 Snowflake DDL export", () => {
       name: "retail-import",
     });
 
-    assert.equal(imported.project_version, "1");
+    assert.equal(imported.project_version, "2");
     assert.equal(imported.physical_model.name, "retail-import");
     assert.deepEqual(
       imported.physical_model.namespaces.map((namespace) => namespace.id),
@@ -523,6 +551,22 @@ describe("SS-005 Snowflake DDL export", () => {
           'CREATE TABLE ANALYTICS.CORE."Events" (ID NUMBER(38, 0));',
         ),
       /quoted identifiers/i,
+    );
+    // Alias and VECTOR grammar expansion belongs to Ticket 2A-2. The shared
+    // type contract can model them without silently widening this boundary.
+    assert.throws(
+      () =>
+        parseSnowflakeDDLToCanonicalProject(
+          "CREATE TABLE ANALYTICS.CORE.EVENTS (ID DECIMAL(12, 2));",
+        ),
+      /unsupported type family DECIMAL/i,
+    );
+    assert.throws(
+      () =>
+        parseSnowflakeDDLToCanonicalProject(
+          "CREATE TABLE ANALYTICS.CORE.EVENTS (EMBEDDING VECTOR(FLOAT, 256));",
+        ),
+      /Ticket 2A-2|VECTOR/i,
     );
   });
 
