@@ -1,4 +1,5 @@
-import { Image, Input, Modal as SemiUIModal, Spin } from "@douyinfe/semi-ui";
+import { Button, Image, Input, Modal as SemiUIModal, Spin, Toast } from "@douyinfe/semi-ui";
+import { IconCopy, IconTick } from "@douyinfe/semi-icons";
 import { saveAs } from "file-saver";
 import { Parser } from "node-sql-parser";
 import { Parser as OracleParser } from "oracle-sql-parser";
@@ -84,11 +85,20 @@ export default function Modal({
   const [selectedTemplateId, setSelectedTemplateId] = useState(-1);
   const [selectedDiagramId, setSelectedDiagramId] = useState(0);
   const [saveAsTitle, setSaveAsTitle] = useState(title);
+  const [copiedDdl, setCopiedDdl] = useState(false);
   const navigate = useNavigateWithParams();
 
   useEffect(() => {
     if (modal === MODAL.SAVEAS) setSaveAsTitle(title);
   }, [modal, title]);
+
+  const handleCopyDdl = () => {
+    if (!exportData.data) return;
+    navigator.clipboard.writeText(exportData.data);
+    setCopiedDdl(true);
+    Toast.success(exportData.extension === "sql" ? "DDL copied to clipboard" : "Copied to clipboard");
+    setTimeout(() => setCopiedDdl(false), 2000);
+  };
 
   const overwriteDiagram = () => {
     setTables(importData.tables);
@@ -426,6 +436,31 @@ export default function Modal({
           modal === MODAL.CODE || modal === MODAL.IMG ? "hidden" : "auto",
         direction: "ltr",
       }}
+      footer={
+        modal === MODAL.CODE ? (
+          <div className="flex items-center justify-between w-full">
+            <Button
+              icon={copiedDdl ? <IconTick /> : <IconCopy />}
+              onClick={handleCopyDdl}
+              theme="light"
+            >
+              {exportData.extension === "sql" ? "Copy DDL" : t("copy")}
+            </Button>
+            <div className="flex gap-2">
+              <Button onClick={() => setModal(MODAL.NONE)}>
+                {t("cancel")}
+              </Button>
+              <Button
+                theme="solid"
+                onClick={getModalOnOk}
+                disabled={!exportData.data}
+              >
+                {getOkText(modal)}
+              </Button>
+            </div>
+          </div>
+        ) : undefined
+      }
     >
       {getModalBody()}
     </SemiUIModal>

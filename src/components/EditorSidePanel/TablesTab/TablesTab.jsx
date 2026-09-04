@@ -1,4 +1,5 @@
-import { Collapse, Button } from "@douyinfe/semi-ui";
+import { useState, useEffect } from "react";
+import { Collapse, Button, Input } from "@douyinfe/semi-ui";
 import { IconEyeOpened, IconEyeClosed } from "@douyinfe/semi-icons";
 import { IconPlus } from "@douyinfe/semi-icons";
 import {
@@ -8,7 +9,7 @@ import {
   useLayout,
   useUndoRedo,
 } from "../../../hooks";
-import { Action, ObjectType, State } from "../../../data/constants";
+import { Action, ObjectType, State, DB } from "../../../data/constants";
 import { useTranslation } from "react-i18next";
 import { DragHandle } from "../../SortableList/DragHandle";
 import { SortableList } from "../../SortableList/SortableList";
@@ -16,8 +17,72 @@ import SearchBar from "./SearchBar";
 import Empty from "../Empty";
 import TableInfo from "./TableInfo";
 
+function TargetNamespaceEditor({
+  targetNamespace,
+  updateTargetNamespace,
+  readOnly,
+}) {
+  const [catalog, setCatalog] = useState(targetNamespace?.catalog ?? "MODEL");
+  const [schema, setSchema] = useState(targetNamespace?.schema ?? "PUBLIC");
+
+  useEffect(() => {
+    setCatalog(targetNamespace?.catalog ?? "MODEL");
+    setSchema(targetNamespace?.schema ?? "PUBLIC");
+  }, [targetNamespace?.catalog, targetNamespace?.schema]);
+
+  const commit = (nextCat, nextSch) => {
+    const cleanCat = (nextCat || "MODEL").trim().toUpperCase();
+    const cleanSch = (nextSch || "PUBLIC").trim().toUpperCase();
+    updateTargetNamespace({ catalog: cleanCat, schema: cleanSch });
+  };
+
+  return (
+    <div className="mb-3 p-2 bg-slate-50 dark:bg-zinc-800/60 rounded-md border border-slate-200 dark:border-zinc-700/60">
+      <div className="text-xs font-semibold text-slate-600 dark:text-zinc-300 mb-1.5 flex items-center justify-between">
+        <span>Target Namespace</span>
+        <span className="text-[10px] text-slate-400 font-normal">Snowflake</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <label className="text-[11px] text-slate-500 dark:text-zinc-400 block mb-0.5">
+            Database
+          </label>
+          <Input
+            size="small"
+            value={catalog}
+            placeholder="MODEL"
+            disabled={readOnly}
+            onChange={(val) => setCatalog(val.toUpperCase())}
+            onBlur={() => commit(catalog, schema)}
+          />
+        </div>
+        <div>
+          <label className="text-[11px] text-slate-500 dark:text-zinc-400 block mb-0.5">
+            Schema
+          </label>
+          <Input
+            size="small"
+            value={schema}
+            placeholder="PUBLIC"
+            disabled={readOnly}
+            onChange={(val) => setSchema(val.toUpperCase())}
+            onBlur={() => commit(catalog, schema)}
+          />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function TablesTab() {
-  const { tables, addTable, setTables } = useDiagram();
+  const {
+    tables,
+    addTable,
+    setTables,
+    database,
+    targetNamespace,
+    updateTargetNamespace,
+  } = useDiagram();
   const { selectedElement, setSelectedElement } = useSelect();
   const { t } = useTranslation();
   const { layout } = useLayout();
@@ -25,6 +90,13 @@ export default function TablesTab() {
 
   return (
     <>
+      {database === DB.SNOWFLAKE && (
+        <TargetNamespaceEditor
+          targetNamespace={targetNamespace}
+          updateTargetNamespace={updateTargetNamespace}
+          readOnly={layout.readOnly}
+        />
+      )}
       <div className="flex gap-2">
         <SearchBar tables={tables} />
         <div>

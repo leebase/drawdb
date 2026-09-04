@@ -1,10 +1,20 @@
 {
-  "name": "drawdb",
+  "name": "erd-tool-desktop",
   "private": true,
   "version": "0.1.0",
-  "productName": "drawDB Desktop",
-  "description": "Installable desktop ERD editor based on drawDB.",
+  "productName": "ERD Tool",
+  "description": "Installable data modeling application with SQLite and Snowflake engineering workflows.",
+  "author": "Lee Harrington",
   "license": "AGPL-3.0-only",
+  "homepage": "https://github.com/leebase/erd-tool#readme",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/leebase/erd-tool.git",
+    "directory": "desktop"
+  },
+  "bugs": {
+    "url": "https://github.com/leebase/erd-tool/issues"
+  },
   "type": "module",
   "main": "dist-electron/main.cjs",
   "desktopName": "erd-tool.desktop",
@@ -26,13 +36,14 @@
     "test": "node --test src/erdTool/projectAdapter.test.js src/erdTool/relationshipDirection.test.js src/erdTool/elkLayout.test.js tests/*.test.mjs",
     "test:browser": "node --test src/erdTool/browserFlow.test.js",
     "test:electron": "node --test tests/electron-runtime.test.mjs",
+    "test:user": "npm run build:desktop && node --test tests/interaction-user.test.mjs",
     "verify:ss002": "npm run test && npm run lint && npm run build && npm run build:desktop",
     "verify:ss012": "npm run test && npm run lint && npm run build && npm run build:desktop",
     "verify:release": "npm run test && npm run lint && npm run build && npm run build:desktop"
   },
   "build": {
-    "appId": "io.drawdb.desktop",
-    "productName": "drawDB Desktop",
+    "appId": "com.leebase.erdtool",
+    "productName": "ERD Tool",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "directories": {
       "buildResources": "build",

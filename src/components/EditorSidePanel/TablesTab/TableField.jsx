@@ -92,7 +92,16 @@ export default function TableField({ data, tid, index, inherited }) {
           onChange={(value) => {
             if (layout.readOnly) return;
 
-            if (value === data.type) return;
+            const selectedTypeInfo = resolveType(database, value);
+            const finalType = selectedTypeInfo.canonicalType || value;
+            const typeInfo = selectedTypeInfo.canonicalType
+              ? resolveType(database, finalType)
+              : selectedTypeInfo;
+            const targetSize =
+              selectedTypeInfo.defaultSize !== undefined
+                ? selectedTypeInfo.defaultSize
+                : typeInfo.defaultSize;
+
             setUndoStack((prev) => [
               ...prev,
               {
@@ -102,7 +111,7 @@ export default function TableField({ data, tid, index, inherited }) {
                 tid: tid,
                 fid: data.id,
                 undo: { type: data.type },
-                redo: { type: value },
+                redo: { type: finalType },
                 message: t("edit_table", {
                   tableName: table.name,
                   extra: "[field]",
@@ -110,25 +119,28 @@ export default function TableField({ data, tid, index, inherited }) {
               },
             ]);
             setRedoStack([]);
-            const typeInfo = resolveType(database, value);
             const incr = data.increment && !!typeInfo.canIncrement;
 
-            if (value === "ENUM" || value === "SET") {
+            if (finalType === "ENUM" || finalType === "SET") {
               updateField(tid, data.id, {
-                type: value,
+                type: finalType,
                 default: "",
                 values: data.values ? [...data.values] : [],
                 increment: incr,
               });
-            } else if (typeInfo.isSized || typeInfo.hasPrecision) {
+            } else if (
+              typeInfo.isSized ||
+              typeInfo.hasPrecision ||
+              selectedTypeInfo.defaultSize !== undefined
+            ) {
               updateField(tid, data.id, {
-                type: value,
-                size: typeInfo.defaultSize,
+                type: finalType,
+                size: targetSize ?? "",
                 increment: incr,
               });
             } else if (!typeInfo.hasDefault || incr) {
               updateField(tid, data.id, {
-                type: value,
+                type: finalType,
                 increment: incr,
                 default: "",
                 size: "",
@@ -136,13 +148,13 @@ export default function TableField({ data, tid, index, inherited }) {
               });
             } else if (typeInfo.hasCheck) {
               updateField(tid, data.id, {
-                type: value,
+                type: finalType,
                 check: "",
                 increment: incr,
               });
             } else {
               updateField(tid, data.id, {
-                type: value,
+                type: finalType,
                 increment: incr,
                 size: "",
                 values: [],

@@ -17,6 +17,7 @@ import {
   Constraint,
   Action,
   ObjectType,
+  DB,
 } from "../../../data/constants";
 import { useDiagram, useLayout, useUndoRedo } from "../../../hooks";
 import { getRelationshipFields } from "../../../utils/utils";
@@ -25,7 +26,8 @@ import { useMemo, useState } from "react";
 
 export default function RelationshipInfo({ data }) {
   const { setUndoStack, setRedoStack } = useUndoRedo();
-  const { tables, deleteRelationship, updateRelationship } = useDiagram();
+  const { tables, database, deleteRelationship, updateRelationship } =
+    useDiagram();
   const { t } = useTranslation();
   const { layout } = useLayout();
   const [editField, setEditField] = useState({});
@@ -303,32 +305,34 @@ export default function RelationshipInfo({ data }) {
         </>
       )}
 
-      <Row gutter={6} className="my-3">
-        <Col span={12}>
-          <div className="font-semibold">{t("on_update")}: </div>
-          <Select
-            optionList={Object.values(Constraint).map((v) => ({
-              label: v,
-              value: v,
-            }))}
-            value={data.updateConstraint}
-            className="w-full"
-            onChange={(value) => changeConstraint("update", value)}
-          />
-        </Col>
-        <Col span={12}>
-          <div className="font-semibold">{t("on_delete")}: </div>
-          <Select
-            optionList={Object.values(Constraint).map((v) => ({
-              label: v,
-              value: v,
-            }))}
-            value={data.deleteConstraint}
-            className="w-full"
-            onChange={(value) => changeConstraint("delete", value)}
-          />
-        </Col>
-      </Row>
+      {database !== DB.SNOWFLAKE && (
+        <Row gutter={6} className="my-3">
+          <Col span={12}>
+            <div className="font-semibold">{t("on_update")}: </div>
+            <Select
+              optionList={Object.values(Constraint).map((v) => ({
+                label: v,
+                value: v,
+              }))}
+              value={data.updateConstraint}
+              className="w-full"
+              onChange={(value) => changeConstraint("update", value)}
+            />
+          </Col>
+          <Col span={12}>
+            <div className="font-semibold">{t("on_delete")}: </div>
+            <Select
+              optionList={Object.values(Constraint).map((v) => ({
+                label: v,
+                value: v,
+              }))}
+              value={data.deleteConstraint}
+              className="w-full"
+              onChange={(value) => changeConstraint("delete", value)}
+            />
+          </Col>
+        </Row>
+      )}
       <Card
         bodyStyle={{ padding: "4px" }}
         style={{ marginTop: "12px", marginBottom: "12px" }}

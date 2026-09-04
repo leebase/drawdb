@@ -32,7 +32,11 @@ function diagramSnapshot(database, tables, relationships) {
 }
 
 function diagramSignature(diagram) {
-  return JSON.stringify(diagramToLogicalModel(diagram));
+  try {
+    return JSON.stringify(diagramToLogicalModel(diagram));
+  } catch {
+    return "";
+  }
 }
 
 export default function ConversationalSchemaAuthoring() {

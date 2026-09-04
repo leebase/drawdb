@@ -140,17 +140,32 @@ function canonicalDataType(column) {
       length: resolvedLength,
     };
   }
-  if (family === "TIMESTAMP_NTZ") {
+  if (
+    family === "TIMESTAMP_NTZ" ||
+    family === "TIMESTAMP_LTZ" ||
+    family === "TIMESTAMP_TZ" ||
+    family === "TIME"
+  ) {
     const resolvedPrecision = datetimePrecision ?? precision ?? 9;
     return {
       family,
-      text: `TIMESTAMP_NTZ(${resolvedPrecision})`,
+      text: `${family}(${resolvedPrecision})`,
       precision: resolvedPrecision,
       scale: null,
       length: null,
     };
   }
-  if (family === "DATE" || family === "BOOLEAN" || family === "FLOAT") {
+  if (
+    family === "DATE" ||
+    family === "BOOLEAN" ||
+    family === "FLOAT" ||
+    family === "VARIANT" ||
+    family === "OBJECT" ||
+    family === "ARRAY" ||
+    family === "GEOGRAPHY" ||
+    family === "GEOMETRY" ||
+    family === "VECTOR"
+  ) {
     return {
       family,
       text: family,

@@ -7,7 +7,7 @@ import {
   InputNumber,
   Checkbox,
 } from "@douyinfe/semi-ui";
-import { Action, ObjectType } from "../../../data/constants";
+import { Action, ObjectType, DB } from "../../../data/constants";
 import { IconDeleteStroked } from "@douyinfe/semi-icons";
 import { useDiagram, useLayout, useUndoRedo } from "../../../hooks";
 import { useTranslation } from "react-i18next";
@@ -106,7 +106,11 @@ export default function FieldDetails({ data, tid }) {
           <div className="font-semibold">{t("size")}</div>
           <InputNumber
             className="my-2 w-full"
-            placeholder={t("size")}
+            placeholder={
+              database === DB.SNOWFLAKE && data.type === "VARCHAR"
+                ? "16777216 (default)"
+                : t("size")
+            }
             value={data.size}
             readonly={layout.readOnly}
             onChange={(value) => updateField(tid, data.id, { size: value })}

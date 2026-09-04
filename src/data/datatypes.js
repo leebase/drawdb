@@ -2251,7 +2251,7 @@ const snowflakeTypesBase = {
     checkDefault: (field) => {
       return /^-?\d+(\.\d+)?$/.test(field.default);
     },
-    hasCheck: true,
+    hasCheck: false,
     isSized: false,
     hasPrecision: true,
     defaultSize: "38,0",
@@ -2263,7 +2263,7 @@ const snowflakeTypesBase = {
     checkDefault: (field) => {
       return doubleRegex.test(field.default);
     },
-    hasCheck: true,
+    hasCheck: false,
     isSized: false,
     hasPrecision: false,
   },
@@ -2271,15 +2271,16 @@ const snowflakeTypesBase = {
     type: "VARCHAR",
     color: stringColor,
     checkDefault: (field) => {
+      if (!field.size) return true;
       if (strHasQuotes(field.default)) {
         return field.default.length - 2 <= field.size;
       }
       return field.default.length <= field.size;
     },
-    hasCheck: true,
+    hasCheck: false,
     isSized: true,
     hasPrecision: false,
-    defaultSize: 255,
+    defaultSize: "",
     hasQuotes: true,
   },
   DATE: {
@@ -2291,6 +2292,20 @@ const snowflakeTypesBase = {
     hasCheck: false,
     isSized: false,
     hasPrecision: false,
+    hasQuotes: true,
+  },
+  TIME: {
+    type: "TIME",
+    color: dateColor,
+    checkDefault: (field) => {
+      return /^(?:[01]?\d|2[0-3]):[0-5]?\d:[0-5]?\d(\.\d+)?$/.test(
+        field.default,
+      );
+    },
+    hasCheck: false,
+    isSized: true,
+    hasPrecision: false,
+    defaultSize: 9,
     hasQuotes: true,
   },
   TIMESTAMP_NTZ: {
@@ -2311,6 +2326,46 @@ const snowflakeTypesBase = {
     // drawDB's hasPrecision editor represents two-part numeric precision and
     // scale (for example NUMBER(38,0)). Snowflake timestamps instead take one
     // fractional-second precision, so use the existing single-size control.
+    isSized: true,
+    hasPrecision: false,
+    defaultSize: 9,
+    hasQuotes: true,
+  },
+  TIMESTAMP_LTZ: {
+    type: "TIMESTAMP_LTZ",
+    color: dateColor,
+    checkDefault: (field) => {
+      if (field.default.toUpperCase() === "CURRENT_TIMESTAMP()") {
+        return true;
+      }
+      if (field.default.toUpperCase() === "CURRENT_TIMESTAMP") {
+        return true;
+      }
+      return /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2}(\.\d+)?)?$/.test(
+        field.default,
+      );
+    },
+    hasCheck: false,
+    isSized: true,
+    hasPrecision: false,
+    defaultSize: 9,
+    hasQuotes: true,
+  },
+  TIMESTAMP_TZ: {
+    type: "TIMESTAMP_TZ",
+    color: dateColor,
+    checkDefault: (field) => {
+      if (field.default.toUpperCase() === "CURRENT_TIMESTAMP()") {
+        return true;
+      }
+      if (field.default.toUpperCase() === "CURRENT_TIMESTAMP") {
+        return true;
+      }
+      return /^\d{4}-\d{2}-\d{2}( \d{2}:\d{2}:\d{2}(\.\d+)?)?([+-]\d{2}:?\d{2})?$/.test(
+        field.default,
+      );
+    },
+    hasCheck: false,
     isSized: true,
     hasPrecision: false,
     defaultSize: 9,
@@ -2345,6 +2400,213 @@ const snowflakeTypesBase = {
     isSized: true,
     hasPrecision: false,
     defaultSize: 1,
+    hasQuotes: true,
+  },
+  VARIANT: {
+    type: "VARIANT",
+    color: documentColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+    noDefault: true,
+  },
+  OBJECT: {
+    type: "OBJECT",
+    color: documentColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+    noDefault: true,
+  },
+  ARRAY: {
+    type: "ARRAY",
+    color: documentColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+    noDefault: true,
+  },
+  GEOGRAPHY: {
+    type: "GEOGRAPHY",
+    color: geometricColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+    noDefault: true,
+  },
+  GEOMETRY: {
+    type: "GEOMETRY",
+    color: geometricColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+    noDefault: true,
+  },
+  VECTOR: {
+    type: "VECTOR",
+    color: vectorColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+    noDefault: true,
+  },
+  INT: {
+    type: "INT",
+    canonicalType: "NUMBER",
+    defaultSize: "38,0",
+    color: intColor,
+    checkDefault: (field) => intRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  INTEGER: {
+    type: "INTEGER",
+    canonicalType: "NUMBER",
+    defaultSize: "38,0",
+    color: intColor,
+    checkDefault: (field) => intRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  BIGINT: {
+    type: "BIGINT",
+    canonicalType: "NUMBER",
+    defaultSize: "38,0",
+    color: intColor,
+    checkDefault: (field) => intRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  SMALLINT: {
+    type: "SMALLINT",
+    canonicalType: "NUMBER",
+    defaultSize: "38,0",
+    color: intColor,
+    checkDefault: (field) => intRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  TINYINT: {
+    type: "TINYINT",
+    canonicalType: "NUMBER",
+    defaultSize: "38,0",
+    color: intColor,
+    checkDefault: (field) => intRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  BYTEINT: {
+    type: "BYTEINT",
+    canonicalType: "NUMBER",
+    defaultSize: "38,0",
+    color: intColor,
+    checkDefault: (field) => intRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  DECIMAL: {
+    type: "DECIMAL",
+    canonicalType: "NUMBER",
+    defaultSize: "38,0",
+    color: decimalColor,
+    checkDefault: (field) => doubleRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  NUMERIC: {
+    type: "NUMERIC",
+    canonicalType: "NUMBER",
+    defaultSize: "38,0",
+    color: decimalColor,
+    checkDefault: (field) => doubleRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  DOUBLE: {
+    type: "DOUBLE",
+    canonicalType: "FLOAT",
+    color: decimalColor,
+    checkDefault: (field) => doubleRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  REAL: {
+    type: "REAL",
+    canonicalType: "FLOAT",
+    color: decimalColor,
+    checkDefault: (field) => doubleRegex.test(field.default),
+    hasCheck: false,
+    isSized: false,
+    hasPrecision: false,
+  },
+  STRING: {
+    type: "STRING",
+    canonicalType: "VARCHAR",
+    defaultSize: "",
+    color: stringColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: true,
+    hasPrecision: false,
+    hasQuotes: true,
+  },
+  TEXT: {
+    type: "TEXT",
+    canonicalType: "VARCHAR",
+    defaultSize: "",
+    color: stringColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: true,
+    hasPrecision: false,
+    hasQuotes: true,
+  },
+  CHAR: {
+    type: "CHAR",
+    canonicalType: "VARCHAR",
+    defaultSize: "",
+    color: stringColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: true,
+    hasPrecision: false,
+    hasQuotes: true,
+  },
+  DATETIME: {
+    type: "DATETIME",
+    canonicalType: "TIMESTAMP_NTZ",
+    defaultSize: 9,
+    color: dateColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: true,
+    hasPrecision: false,
+    hasQuotes: true,
+  },
+  TIMESTAMP: {
+    type: "TIMESTAMP",
+    canonicalType: "TIMESTAMP_NTZ",
+    defaultSize: 9,
+    color: dateColor,
+    checkDefault: () => true,
+    hasCheck: false,
+    isSized: true,
+    hasPrecision: false,
     hasQuotes: true,
   },
 };
