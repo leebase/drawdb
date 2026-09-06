@@ -702,3 +702,54 @@ describe("SS-009 mocked Snowflake metadata reverse engineering", () => {
     assertNoSecretMaterial(diagram);
   });
 });
+
+describe("W2A-03 metadata type-token normalization", () => {
+  function singleColumnMetadata(dataType, overrides = {}) {
+    return {
+      schemata: [{ catalog_name: "A", schema_name: "B", schema_comment: null }],
+      tables: [
+        { table_catalog: "A", table_schema: "B", table_name: "T", table_type: "BASE TABLE", comment: null },
+      ],
+      columns: [
+        column("A", "B", "T", "C", 1, dataType, overrides),
+      ],
+      primaryKeys: [],
+      uniqueKeys: [],
+      foreignKeys: [],
+    };
+  }
+
+  it("keeps the bare CHAR default of 1 distinct from the bare VARCHAR default", async () => {
+    const { snowflakeMetadataToCanonicalProject } = await loadSnowflakeMetadataMapper();
+    const charProject = snowflakeMetadataToCanonicalProject(
+      singleColumnMetadata("CHAR", { character_maximum_length: null }),
+      { name: "T" },
+    );
+    assert.equal(charProject.physical_model.tables[0].columns[0].data_type.text, "VARCHAR(1)");
+    const textProject = snowflakeMetadataToCanonicalProject(
+      singleColumnMetadata("TEXT", { character_maximum_length: null }),
+      { name: "T" },
+    );
+    assert.equal(textProject.physical_model.tables[0].columns[0].data_type.text, "VARCHAR(16777216)");
+    const sizedChar = snowflakeMetadataToCanonicalProject(
+      singleColumnMetadata("CHAR", { character_maximum_length: 10 }),
+      { name: "T" },
+    );
+    assert.equal(sizedChar.physical_model.tables[0].columns[0].data_type.text, "VARCHAR(10)");
+  });
+
+  it("normalizes driver tokens FIXED and REAL and rejects unknown tokens", async () => {
+    const { snowflakeMetadataToCanonicalProject } = await loadSnowflakeMetadataMapper();
+    const fixed = snowflakeMetadataToCanonicalProject(
+      singleColumnMetadata("FIXED", { numeric_precision: 10, numeric_scale: 2 }),
+      { name: "T" },
+    );
+    assert.equal(fixed.physical_model.tables[0].columns[0].data_type.text, "NUMBER(10, 2)");
+    const real = snowflakeMetadataToCanonicalProject(singleColumnMetadata("REAL"), { name: "T" });
+    assert.equal(real.physical_model.tables[0].columns[0].data_type.text, "FLOAT");
+    assert.throws(
+      () => snowflakeMetadataToCanonicalProject(singleColumnMetadata("DECFLOAT"), { name: "T" }),
+      /unsupported/i,
+    );
+  });
+});

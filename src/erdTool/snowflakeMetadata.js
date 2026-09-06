@@ -1,4 +1,11 @@
 import { canonicalProjectToDiagram } from "./projectAdapter.js";
+import {
+  SNOWFLAKE_TYPE_FAMILIES,
+  SNOWFLAKE_TYPE_ALIASES,
+  SNOWFLAKE_TYPE_BOUNDS,
+  snowflakeTypeText,
+  validateSnowflakeType,
+} from "./snowflakeTypeContract.js";
 
 const PROJECT_VERSION = "1";
 const MODEL_VERSION = "1";
@@ -94,7 +101,17 @@ function namespaceParts(namespaceObjectId) {
 }
 
 function canonicalDataType(column) {
-  const family = identifier(column.data_type, "column.data_type");
+  const rawToken = identifier(column.data_type, "column.data_type");
+  let family = rawToken;
+  if (family === "FIXED") {
+    family = "NUMBER";
+  } else if (family in SNOWFLAKE_TYPE_ALIASES) {
+    family = SNOWFLAKE_TYPE_ALIASES[family];
+  }
+  if (!SNOWFLAKE_TYPE_FAMILIES.includes(family)) {
+    fail(`unsupported Snowflake data type ${family}`);
+  }
+
   const precision = integerOrNull(
     column.numeric_precision,
     "column.numeric_precision",
@@ -109,72 +126,53 @@ function canonicalDataType(column) {
     "column.datetime_precision",
   );
 
+  let resolvedPrecision = null;
+  let resolvedScale = null;
+  let resolvedLength = null;
+
   if (family === "NUMBER") {
-    const resolvedPrecision = precision ?? 38;
-    const resolvedScale = scale ?? 0;
-    return {
-      family,
-      text: `NUMBER(${resolvedPrecision}, ${resolvedScale})`,
-      precision: resolvedPrecision,
-      scale: resolvedScale,
-      length: null,
-    };
-  }
-  if (family === "VARCHAR") {
-    const resolvedLength = length ?? 16777216;
-    return {
-      family,
-      text: `VARCHAR(${resolvedLength})`,
-      precision: null,
-      scale: null,
-      length: resolvedLength,
-    };
-  }
-  if (family === "BINARY") {
-    const resolvedLength = length ?? 8388608;
-    return {
-      family,
-      text: `BINARY(${resolvedLength})`,
-      precision: null,
-      scale: null,
-      length: resolvedLength,
-    };
-  }
-  if (
+    resolvedPrecision =
+      precision ?? SNOWFLAKE_TYPE_BOUNDS.NUMBER.defaultPrecision;
+    resolvedScale = scale ?? SNOWFLAKE_TYPE_BOUNDS.NUMBER.defaultScale;
+  } else if (family === "VARCHAR") {
+    // CHAR/CHARACTER/NCHAR keep their distinct bare default (1) before
+    // normalizing to VARCHAR; every other VARCHAR alias defaults to the max.
+    const charFamily =
+      rawToken === "CHAR" || rawToken === "CHARACTER" || rawToken === "NCHAR";
+    resolvedLength =
+      length ?? (charFamily ? 1 : SNOWFLAKE_TYPE_BOUNDS.VARCHAR.defaultLength);
+  } else if (family === "BINARY") {
+    resolvedLength = length ?? SNOWFLAKE_TYPE_BOUNDS.BINARY.defaultLength;
+  } else if (
     family === "TIMESTAMP_NTZ" ||
     family === "TIMESTAMP_LTZ" ||
     family === "TIMESTAMP_TZ" ||
     family === "TIME"
   ) {
-    const resolvedPrecision = datetimePrecision ?? precision ?? 9;
-    return {
-      family,
-      text: `${family}(${resolvedPrecision})`,
-      precision: resolvedPrecision,
-      scale: null,
-      length: null,
-    };
+    resolvedPrecision =
+      datetimePrecision ??
+      precision ??
+      SNOWFLAKE_TYPE_BOUNDS[family].defaultPrecision;
   }
-  if (
-    family === "DATE" ||
-    family === "BOOLEAN" ||
-    family === "FLOAT" ||
-    family === "VARIANT" ||
-    family === "OBJECT" ||
-    family === "ARRAY" ||
-    family === "GEOGRAPHY" ||
-    family === "GEOMETRY" ||
-    family === "VECTOR"
-  ) {
-    return {
-      family,
-      text: family,
-      precision: null,
-      scale: null,
-      length: null,
-    };
-  }
-  fail(`unsupported Snowflake data type ${family}`);
+
+  const candidate7 = {
+    family,
+    precision: resolvedPrecision,
+    scale: resolvedScale,
+    length: resolvedLength,
+    vector_element_type: null,
+    vector_dimension: null,
+  };
+  candidate7.text = snowflakeTypeText(candidate7);
+  validateSnowflakeType(candidate7);
+
+  return {
+    family,
+    text: candidate7.text,
+    precision: resolvedPrecision,
+    scale: resolvedScale,
+    length: resolvedLength,
+  };
 }
 
 function buildNamespaces(metadata, tableRows) {

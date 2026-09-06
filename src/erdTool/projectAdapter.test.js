@@ -1474,7 +1474,10 @@ describe("diagramToCanonicalProject", () => {
 
     const exported = diagramToCanonicalProject(diagram);
     const ddl = renderCanonicalSnowflakeDDL(exported);
-    assert.match(ddl, /COL_VARCHAR_UNCONSTRAINED VARCHAR NOT NULL/);
+    assert.match(
+      ddl,
+      /COL_VARCHAR_UNCONSTRAINED VARCHAR\(16777216\) NOT NULL/,
+    );
     assert.match(ddl, /COL_VARCHAR_SIZED VARCHAR\(100\)/);
     assert.match(ddl, /COL_TIME TIME\(9\)/);
     assert.match(ddl, /COL_TIMESTAMP_LTZ TIMESTAMP_LTZ\(9\)/);
