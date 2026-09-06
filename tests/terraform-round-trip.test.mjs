@@ -1373,4 +1373,136 @@ terraform {
     assert.match(sqliteDdl, /CREATE TABLE IF NOT EXISTS "users"/);
     assert.match(sqliteDdl, /PRIMARY KEY\("id"\)/);
   });
+
+  describe("Wave 2A CHECK constraints table-driven contracts", () => {
+    it("fails closed on export when CHECK constraints are present and succeeds when empty", async () => {
+      const { canonicalProjectToTerraformHcl } = await loadTerraformRoundTrip();
+      const baseProject = structuredClone(supportedCanonicalProject());
+      baseProject.physical_model.model_version = "2";
+      for (const table of baseProject.physical_model.tables) {
+        table.check_constraints = [];
+        for (const column of table.columns) {
+          column.data_type.vector_element_type = null;
+          column.data_type.vector_dimension = null;
+        }
+      }
+
+      const exportCases = [
+        {
+          description: "export throws for non-empty checks on project-shaped input",
+          input: (() => {
+            const p = structuredClone(baseProject);
+            p.physical_model.tables[0].check_constraints = [
+              {
+                id: "constraint:ANALYTICS.CORE.CUSTOMER.CK_ID",
+                name: "CK_ID",
+                expression: "ID > 0",
+                validation: "VALIDATE",
+                name_origin: "explicit",
+              },
+            ];
+            return p;
+          })(),
+          shouldThrow: true,
+          expectedError: /CHECK/,
+        },
+        {
+          description: "export throws for non-empty checks on model-shaped input",
+          input: (() => {
+            const m = structuredClone(baseProject.physical_model);
+            m.tables[0].check_constraints = [
+              {
+                id: "constraint:ANALYTICS.CORE.CUSTOMER.CK_ID",
+                name: "CK_ID",
+                expression: "ID > 0",
+                validation: "VALIDATE",
+                name_origin: "explicit",
+              },
+            ];
+            return m;
+          })(),
+          shouldThrow: true,
+          expectedError: /CHECK/,
+        },
+        {
+          description: "export with check_constraints: [] succeeds and produces HCL",
+          input: (() => {
+            const p = structuredClone(baseProject);
+            for (const table of p.physical_model.tables) {
+              table.check_constraints = [];
+            }
+            return p;
+          })(),
+          shouldThrow: false,
+        },
+      ];
+
+      for (const { description, input, shouldThrow, expectedError } of exportCases) {
+        if (shouldThrow) {
+          let output = null;
+          assert.throws(
+            () => {
+              output = canonicalProjectToTerraformHcl(input);
+            },
+            expectedError,
+            `${description}: expected error matching ${expectedError}`,
+          );
+          assert.equal(
+            output,
+            null,
+            `${description}: project with checks must never produce HCL text`,
+          );
+        } else {
+          const hcl = canonicalProjectToTerraformHcl(input);
+          assert.ok(
+            typeof hcl === "string" && hcl.length > 0,
+            `${description}: expected HCL string`,
+          );
+          assert.match(
+            hcl,
+            /resource "snowflake_table"/,
+            `${description}: HCL contains snowflake_table`,
+          );
+        }
+      }
+    });
+
+    it("rejects unsupported CHECK constraint types and check blocks on import", async () => {
+      const { terraformHclToCanonicalProject } = await loadTerraformRoundTrip();
+
+      const importCases = [
+        {
+          description: "import rejects type = 'CHECK'",
+          hcl: `
+resource "snowflake_table" "t" {
+  database = "ANALYTICS"
+  schema   = "CORE"
+  name     = "T"
+  column { name = "ID" type = "NUMBER(38, 0)" }
+}
+resource "snowflake_table_constraint" "chk" {
+  name     = "CHK"
+  type     = "CHECK"
+  table_id = snowflake_table.t.fully_qualified_name
+  columns  = ["ID"]
+}`,
+          expectedError: /unsupported Terraform table constraint type CHECK/i,
+        },
+        {
+          description: "import rejects check block",
+          hcl: 'check "health_check" { data "snowflake_table" "t" {} }',
+          expectedError: /unsupported Terraform block check/i,
+        },
+      ];
+
+      for (const { description, hcl, expectedError } of importCases) {
+        assert.throws(
+          () => terraformHclToCanonicalProject(hcl),
+          expectedError,
+          `${description}: expected error matching ${expectedError}`,
+        );
+      }
+    });
+  });
 });
+

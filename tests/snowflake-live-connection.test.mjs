@@ -40,7 +40,7 @@ function temporaryConfig() {
   return { directory, configPath, keyPath };
 }
 
-function fakeDriver({ connectionError } = {}) {
+function fakeDriver({ connectionError, checkConstraints } = {}) {
   const observed = { connectionOptions: null, queries: [], destroyed: 0 };
   const rowsFor = (sqlText) => {
     if (sqlText.startsWith("SELECT CURRENT_ACCOUNT")) {
@@ -120,7 +120,7 @@ function fakeDriver({ connectionError } = {}) {
       ];
     }
     if (sqlText.includes(".CHECK_CONSTRAINTS")) {
-      return [];
+      return checkConstraints ?? [];
     }
     if (sqlText.includes(".TABLE_CONSTRAINTS")) {
       return [
@@ -439,6 +439,86 @@ describe("live Snowflake Electron-main service", () => {
       }),
       /SNOWFLAKE_INVALID_REQUEST/,
     );
+  });
+
+  it("queries CHECK_CONSTRAINTS with exact SQL text, binds, query order, and lowercase key normalization", async () => {
+    const { directory, configPath } = temporaryConfig();
+    const checkConstraints = [
+      {
+        CONSTRAINT_CATALOG: "CHINOOK",
+        CONSTRAINT_SCHEMA: "PUBLIC",
+        CONSTRAINT_TABLE: "ALBUM",
+        CONSTRAINT_NAME: "CK_ALBUM_TITLE",
+        CHECK_CLAUSE: "LENGTH(TITLE) > 0",
+      },
+    ];
+    const driver = fakeDriver({ checkConstraints });
+    const service = createSnowflakeService({
+      driver,
+      homeDirectory: directory,
+      configPaths: [configPath],
+      createId: () => "session-check-service",
+    });
+    await service.connect({ mode: "profile", profileName: "erd-tool" });
+
+    const metadata = await service.reverseEngineer({
+      sessionId: "session-check-service",
+      database: "CHINOOK",
+      schema: "PUBLIC",
+      tables: ["ALBUM", "ARTIST"],
+    });
+
+    const checkQueries = driver.observed.queries.filter(({ sqlText }) =>
+      sqlText.includes(".CHECK_CONSTRAINTS"),
+    );
+    assert.equal(
+      checkQueries.length,
+      1,
+      "CHECK_CONSTRAINTS query must be issued exactly once per reverseEngineer",
+    );
+
+    const expectedSql =
+      'SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_TABLE, CONSTRAINT_NAME, CHECK_CLAUSE FROM "CHINOOK".INFORMATION_SCHEMA.CHECK_CONSTRAINTS WHERE CONSTRAINT_CATALOG = ? AND CONSTRAINT_SCHEMA = ? AND CONSTRAINT_TABLE IN (?, ?) ORDER BY CONSTRAINT_TABLE, CONSTRAINT_NAME';
+    const normalizedObservedSql = checkQueries[0].sqlText.replace(/\s+/g, " ").trim();
+    assert.equal(normalizedObservedSql, expectedSql);
+    assert.deepEqual(checkQueries[0].binds, [
+      "CHINOOK",
+      "PUBLIC",
+      "ALBUM",
+      "ARTIST",
+    ]);
+
+    const colIndex = driver.observed.queries.findIndex(({ sqlText }) =>
+      sqlText.includes(".COLUMNS"),
+    );
+    const checkIndex = driver.observed.queries.findIndex(({ sqlText }) =>
+      sqlText.includes(".CHECK_CONSTRAINTS"),
+    );
+    const tableConstraintsIndex = driver.observed.queries.findIndex(({ sqlText }) =>
+      sqlText.includes(".TABLE_CONSTRAINTS"),
+    );
+
+    assert.ok(colIndex !== -1, "COLUMNS query must be issued");
+    assert.ok(checkIndex !== -1, "CHECK_CONSTRAINTS query must be issued");
+    assert.ok(tableConstraintsIndex !== -1, "TABLE_CONSTRAINTS query must be issued");
+    assert.ok(
+      colIndex < checkIndex,
+      "CHECK_CONSTRAINTS query must be issued AFTER columns",
+    );
+    assert.ok(
+      checkIndex < tableConstraintsIndex,
+      "CHECK_CONSTRAINTS query must be issued BEFORE table constraints",
+    );
+
+    assert.deepEqual(metadata.checkConstraints, [
+      {
+        constraint_catalog: "CHINOOK",
+        constraint_schema: "PUBLIC",
+        constraint_table: "ALBUM",
+        constraint_name: "CK_ALBUM_TITLE",
+        check_clause: "LENGTH(TITLE) > 0",
+      },
+    ]);
   });
 });
 

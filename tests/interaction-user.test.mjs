@@ -1,3 +1,24 @@
+// Wave 2A Ticket 2A-4 — UI-flow coverage status (structural-oracle lineage, main):
+//
+// CHECK UI coverage: DEFERRED BY DESIGN. No CHECK editor exists yet — W2A-04
+// delivered CHECK semantics only; the Table Info CHECK editor is a separate
+// follow-on ticket with its own production scope and UI acceptance tests.
+//
+// VECTOR UI coverage: DEFERRED BY DESIGN. On this lineage the Snowflake VECTOR
+// editor entry (src/data/datatypes.js) has isSized:false / hasPrecision:false,
+// so FieldDetails renders no element-type or dimension control; the bounded
+// "INT|FLOAT,1..4096" editor exists only on the unmerged remediation lineage
+// (Ticket 2A-1, origin/remediation/d161-deploy-boundary) and is kept distinct
+// by decision (D165). Porting it is part of the same follow-on UI ticket.
+//
+// Semantic CHECK and VECTOR paths are covered deterministically in
+// src/erdTool/projectAdapter.test.js, tests/test-snowflake-ddl-export.test.mjs,
+// tests/snowflake-ddl-import-integration.test.mjs,
+// tests/snowflake-metadata-reverse-engineering.test.mjs,
+// tests/snowflake-live-connection.test.mjs, and tests/terraform-round-trip.test.mjs.
+/**
+ * CHECK UI coverage: DEFERRED BY DESIGN — no CHECK editor exists yet (W2A-04 delivered CHECK semantics only; the Table Info CHECK editor is a separate follow-on ticket). Semantic CHECK paths are covered in projectAdapter.test.js, snowflake-metadata-reverse-engineering.test.mjs, snowflake-live-connection.test.mjs, and terraform-round-trip.test.mjs.
+ */
 import assert from "node:assert/strict";
 import { describe, it, before, after } from "node:test";
 import path from "node:path";

@@ -6,6 +6,7 @@ import {
   diagramToCanonicalProject,
   renderCanonicalSnowflakeStatements,
 } from "../src/erdTool/projectAdapter.js";
+import { assertSemanticEqual } from "./wave2a-01-parity.mjs";
 
 const LIVE_PROFILE = process.env.ERD_TOOL_LIVE_PROFILE;
 
@@ -49,7 +50,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.DEPARTMENT.DEPT_ID`,
             name: "DEPT_ID",
             ordinal: 1,
-            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null },
+            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null, vector_element_type: null, vector_dimension: null },
             nullable: false,
             default: null,
             comment: null,
@@ -58,7 +59,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.DEPARTMENT.NAME`,
             name: "NAME",
             ordinal: 2,
-            data_type: { family: "VARCHAR", text: "VARCHAR(100)", precision: null, scale: null, length: 100 },
+            data_type: { family: "VARCHAR", text: "VARCHAR(100)", precision: null, scale: null, length: 100, vector_element_type: null, vector_dimension: null },
             nullable: false,
             default: null,
             comment: null,
@@ -67,7 +68,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.DEPARTMENT.IS_ACTIVE`,
             name: "IS_ACTIVE",
             ordinal: 3,
-            data_type: { family: "BOOLEAN", text: "BOOLEAN", precision: null, scale: null, length: null },
+            data_type: { family: "BOOLEAN", text: "BOOLEAN", precision: null, scale: null, length: null, vector_element_type: null, vector_dimension: null },
             nullable: true,
             default: null,
             comment: null,
@@ -76,7 +77,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.DEPARTMENT.CREATED_AT`,
             name: "CREATED_AT",
             ordinal: 4,
-            data_type: { family: "TIMESTAMP_NTZ", text: "TIMESTAMP_NTZ(9)", precision: 9, scale: null, length: null },
+            data_type: { family: "TIMESTAMP_NTZ", text: "TIMESTAMP_NTZ(9)", precision: 9, scale: null, length: null, vector_element_type: null, vector_dimension: null },
             nullable: true,
             default: null,
             comment: null,
@@ -85,7 +86,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.DEPARTMENT.METADATA`,
             name: "METADATA",
             ordinal: 5,
-            data_type: { family: "VARIANT", text: "VARIANT", precision: null, scale: null, length: null },
+            data_type: { family: "VARIANT", text: "VARIANT", precision: null, scale: null, length: null, vector_element_type: null, vector_dimension: null },
             nullable: true,
             default: null,
             comment: null,
@@ -101,6 +102,15 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             referenced_columns: [],
           },
         ],
+        check_constraints: [
+          {
+            id: `constraint:${database}.${schema}.DEPARTMENT.CK_DEPT_NAME`,
+            name: "CK_DEPT_NAME",
+            expression: "LENGTH(NAME) > 0",
+            validation: "VALIDATE",
+            name_origin: "explicit",
+          },
+        ],
       },
       {
         id: `table:${database}.${schema}.EMPLOYEE`,
@@ -113,7 +123,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.EMPLOYEE.EMP_ID`,
             name: "EMP_ID",
             ordinal: 1,
-            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null },
+            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null, vector_element_type: null, vector_dimension: null },
             nullable: false,
             default: null,
             comment: null,
@@ -122,7 +132,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.EMPLOYEE.DEPT_ID`,
             name: "DEPT_ID",
             ordinal: 2,
-            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null },
+            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null, vector_element_type: null, vector_dimension: null },
             nullable: false,
             default: null,
             comment: null,
@@ -131,7 +141,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.EMPLOYEE.FIRST_NAME`,
             name: "FIRST_NAME",
             ordinal: 3,
-            data_type: { family: "VARCHAR", text: "VARCHAR(50)", precision: null, scale: null, length: 50 },
+            data_type: { family: "VARCHAR", text: "VARCHAR(50)", precision: null, scale: null, length: 50, vector_element_type: null, vector_dimension: null },
             nullable: true,
             default: null,
             comment: null,
@@ -140,7 +150,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.EMPLOYEE.LAST_NAME`,
             name: "LAST_NAME",
             ordinal: 4,
-            data_type: { family: "VARCHAR", text: "VARCHAR(50)", precision: null, scale: null, length: 50 },
+            data_type: { family: "VARCHAR", text: "VARCHAR(50)", precision: null, scale: null, length: 50, vector_element_type: null, vector_dimension: null },
             nullable: false,
             default: null,
             comment: null,
@@ -149,7 +159,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.EMPLOYEE.SALARY`,
             name: "SALARY",
             ordinal: 5,
-            data_type: { family: "NUMBER", text: "NUMBER(10, 2)", precision: 10, scale: 2, length: null },
+            data_type: { family: "NUMBER", text: "NUMBER(10, 2)", precision: 10, scale: 2, length: null, vector_element_type: null, vector_dimension: null },
             nullable: true,
             default: null,
             comment: null,
@@ -158,7 +168,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.EMPLOYEE.HIRE_DATE`,
             name: "HIRE_DATE",
             ordinal: 6,
-            data_type: { family: "DATE", text: "DATE", precision: null, scale: null, length: null },
+            data_type: { family: "DATE", text: "DATE", precision: null, scale: null, length: null, vector_element_type: null, vector_dimension: null },
             nullable: true,
             default: null,
             comment: null,
@@ -167,7 +177,24 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.EMPLOYEE.PROFILE`,
             name: "PROFILE",
             ordinal: 7,
-            data_type: { family: "OBJECT", text: "OBJECT", precision: null, scale: null, length: null },
+            data_type: { family: "OBJECT", text: "OBJECT", precision: null, scale: null, length: null, vector_element_type: null, vector_dimension: null },
+            nullable: true,
+            default: null,
+            comment: null,
+          },
+          {
+            id: `column:${database}.${schema}.EMPLOYEE.EMBEDDING`,
+            name: "EMBEDDING",
+            ordinal: 8,
+            data_type: {
+              family: "VECTOR",
+              text: "VECTOR(FLOAT, 1536)",
+              precision: null,
+              scale: null,
+              length: null,
+              vector_element_type: "FLOAT",
+              vector_dimension: 1536,
+            },
             nullable: true,
             default: null,
             comment: null,
@@ -191,6 +218,17 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             referenced_columns: [],
           },
         ],
+        check_constraints: [
+          {
+            // Named on purpose: Snowflake assigns system names to unnamed
+            // CHECKs, so an unnamed source check can never round-trip by name.
+            id: `constraint:${database}.${schema}.EMPLOYEE.CK_EMPLOYEE_SALARY`,
+            name: "CK_EMPLOYEE_SALARY",
+            expression: "SALARY >= 0",
+            validation: "VALIDATE",
+            name_origin: "explicit",
+          },
+        ],
       },
       {
         id: `table:${database}.${schema}.ASSIGNMENT`,
@@ -203,7 +241,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.ASSIGNMENT.PROJECT_ID`,
             name: "PROJECT_ID",
             ordinal: 1,
-            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null },
+            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null, vector_element_type: null, vector_dimension: null },
             nullable: false,
             default: null,
             comment: null,
@@ -212,7 +250,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.ASSIGNMENT.EMP_ID`,
             name: "EMP_ID",
             ordinal: 2,
-            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null },
+            data_type: { family: "NUMBER", text: "NUMBER(38, 0)", precision: 38, scale: 0, length: null, vector_element_type: null, vector_dimension: null },
             nullable: false,
             default: null,
             comment: null,
@@ -221,7 +259,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             id: `column:${database}.${schema}.ASSIGNMENT.ROLE_NAME`,
             name: "ROLE_NAME",
             ordinal: 3,
-            data_type: { family: "VARCHAR", text: "VARCHAR(50)", precision: null, scale: null, length: 50 },
+            data_type: { family: "VARCHAR", text: "VARCHAR(50)", precision: null, scale: null, length: 50, vector_element_type: null, vector_dimension: null },
             nullable: false,
             default: null,
             comment: null,
@@ -248,6 +286,7 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
             referenced_columns: [],
           },
         ],
+        check_constraints: [],
       },
     ];
 
@@ -256,6 +295,9 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
       .map((t) => ({
         ...t,
         constraints: [...t.constraints].sort((a, b) => a.id.localeCompare(b.id)),
+        check_constraints: [...(t.check_constraints || [])].sort((a, b) =>
+          a.id.localeCompare(b.id),
+        ),
       }))
       .sort((a, b) => a.id.localeCompare(b.id));
 
@@ -285,8 +327,8 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
     const sourceModel = {
       project_version: "1",
       physical_model: {
-        model_version: "1",
-        name: `qa-model-${runId}`,
+        model_version: "2",
+        name: `${database}.${schema}`,
         namespaces: [
           {
             id: `namespace:${database}.${schema}`,
@@ -339,42 +381,26 @@ describe("S4-01 Live Snowflake Round-Trip Harness", () => {
         title: `${database}.${schema}`,
       });
       const importedProject = diagramToCanonicalProject(importedDiagram);
-      const importedModel = importedProject.physical_model;
 
-      // 4. Assert model parity
-      const importedTableNames = importedModel.tables.map((t) => t.name).sort();
-      assert.deepEqual(importedTableNames, ["ASSIGNMENT", "DEPARTMENT", "EMPLOYEE"]);
-
-      // Verify DEPARTMENT columns and types
-      const deptTable = importedModel.tables.find((t) => t.name === "DEPARTMENT");
-      assert.ok(deptTable);
-      const deptColFamilies = deptTable.columns.map((c) => `${c.name}:${c.data_type.family}`);
-      assert.deepEqual(deptColFamilies, [
-        "DEPT_ID:NUMBER",
-        "NAME:VARCHAR",
-        "IS_ACTIVE:BOOLEAN",
-        "CREATED_AT:TIMESTAMP_NTZ",
-        "METADATA:VARIANT",
-      ]);
-
-      // Verify EMPLOYEE columns and types
-      const empTable = importedModel.tables.find((t) => t.name === "EMPLOYEE");
-      assert.ok(empTable);
-      const empColFamilies = empTable.columns.map((c) => `${c.name}:${c.data_type.family}`);
-      assert.deepEqual(empColFamilies, [
-        "EMP_ID:NUMBER",
-        "DEPT_ID:NUMBER",
-        "FIRST_NAME:VARCHAR",
-        "LAST_NAME:VARCHAR",
-        "SALARY:NUMBER",
-        "HIRE_DATE:DATE",
-        "PROFILE:OBJECT",
-      ]);
-
-      // Verify relationships
-      assert.equal(importedModel.relationships.length, 2);
-      const relNames = importedModel.relationships.map((r) => r.name).sort();
-      assert.deepEqual(relNames, ["FK_ASSIGN_EMP", "FK_EMP_DEPT"]);
+      // 4. Assert model parity. Reverse engineering cannot observe CHECK
+      // enforcement or name provenance (INFORMATION_SCHEMA exposes neither),
+      // so the metadata mapper records validation UNKNOWN / name_origin
+      // unknown by contract. The expected model states that explicitly rather
+      // than weakening the parity comparison.
+      const expectedAfterReverseEngineering = structuredClone(sourceModel);
+      for (const table of expectedAfterReverseEngineering.physical_model.tables) {
+        table.check_constraints = table.check_constraints.map((check) => ({
+          ...check,
+          validation: "UNKNOWN",
+          name_origin: "unknown",
+        }));
+      }
+      assertSemanticEqual(
+        assert,
+        importedProject,
+        expectedAfterReverseEngineering,
+        "Live reverse-engineered model must have full semantic parity with source model",
+      );
     } finally {
       // 5. Tear down temporary test schema and disconnect
       try {

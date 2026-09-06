@@ -5,6 +5,7 @@ import {
   canonicalProjectToDiagram,
   diagramToCanonicalProject,
 } from "../src/erdTool/projectAdapter.js";
+import { createSnowflakeService } from "../src/electron/snowflakeService.js";
 
 async function loadSnowflakeMetadataMapper() {
   return import("../src/erdTool/snowflakeMetadata.js");
@@ -752,9 +753,249 @@ describe("W2A-03 metadata type-token normalization", () => {
 });
 
 describe("W2A-04 metadata CHECK constraint mapping", () => {
-  function checkMetadataFixture() {
-    return {
-      schemata: [{ catalog_name: "ANALYTICS", schema_name: "CORE", schema_comment: null }],
+  const metadataCheckRows = [
+    {
+      name: "one check",
+      tables: [
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "T1",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+      ],
+      columns: [column("ANALYTICS", "CORE", "T1", "ID", 1, "NUMBER")],
+      checkConstraints: [
+        {
+          constraint_catalog: "ANALYTICS",
+          constraint_schema: "CORE",
+          constraint_table: "T1",
+          constraint_name: "CK_T1_ID",
+          check_clause: "ID > 0",
+        },
+      ],
+      expectedChecks: {
+        T1: [
+          {
+            id: "constraint:ANALYTICS.CORE.T1.CK_T1_ID",
+            name: "CK_T1_ID",
+            expression: "ID > 0",
+            validation: "UNKNOWN",
+            name_origin: "unknown",
+          },
+        ],
+      },
+    },
+    {
+      name: "several per table sorted by id",
+      tables: [
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "T1",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+      ],
+      columns: [
+        column("ANALYTICS", "CORE", "T1", "ID", 1, "NUMBER"),
+        column("ANALYTICS", "CORE", "T1", "VAL", 2, "NUMBER"),
+      ],
+      checkConstraints: [
+        {
+          constraint_catalog: "ANALYTICS",
+          constraint_schema: "CORE",
+          constraint_table: "T1",
+          constraint_name: "CK_Z_VAL",
+          check_clause: "VAL < 100",
+        },
+        {
+          constraint_catalog: "ANALYTICS",
+          constraint_schema: "CORE",
+          constraint_table: "T1",
+          constraint_name: "CK_A_ID",
+          check_clause: "ID > 0",
+        },
+      ],
+      expectedChecks: {
+        T1: [
+          {
+            id: "constraint:ANALYTICS.CORE.T1.CK_A_ID",
+            name: "CK_A_ID",
+            expression: "ID > 0",
+            validation: "UNKNOWN",
+            name_origin: "unknown",
+          },
+          {
+            id: "constraint:ANALYTICS.CORE.T1.CK_Z_VAL",
+            name: "CK_Z_VAL",
+            expression: "VAL < 100",
+            validation: "UNKNOWN",
+            name_origin: "unknown",
+          },
+        ],
+      },
+    },
+    {
+      name: "two selected tables sharing a constraint name",
+      tables: [
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "T1",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "T2",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+      ],
+      columns: [
+        column("ANALYTICS", "CORE", "T1", "ID", 1, "NUMBER"),
+        column("ANALYTICS", "CORE", "T2", "ID", 1, "NUMBER"),
+      ],
+      checkConstraints: [
+        {
+          constraint_catalog: "ANALYTICS",
+          constraint_schema: "CORE",
+          constraint_table: "T1",
+          constraint_name: "CK_COMMON",
+          check_clause: "ID > 0",
+        },
+        {
+          constraint_catalog: "ANALYTICS",
+          constraint_schema: "CORE",
+          constraint_table: "T2",
+          constraint_name: "CK_COMMON",
+          check_clause: "ID > 10",
+        },
+      ],
+      expectedChecks: {
+        T1: [
+          {
+            id: "constraint:ANALYTICS.CORE.T1.CK_COMMON",
+            name: "CK_COMMON",
+            expression: "ID > 0",
+            validation: "UNKNOWN",
+            name_origin: "unknown",
+          },
+        ],
+        T2: [
+          {
+            id: "constraint:ANALYTICS.CORE.T2.CK_COMMON",
+            name: "CK_COMMON",
+            expression: "ID > 10",
+            validation: "UNKNOWN",
+            name_origin: "unknown",
+          },
+        ],
+      },
+    },
+    {
+      name: "clause with outer parens preserved verbatim",
+      tables: [
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "T1",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+      ],
+      columns: [column("ANALYTICS", "CORE", "T1", "ID", 1, "NUMBER")],
+      checkConstraints: [
+        {
+          constraint_catalog: "ANALYTICS",
+          constraint_schema: "CORE",
+          constraint_table: "T1",
+          constraint_name: "CK_PARENS",
+          check_clause: "(ID >= 0 AND ID <= 100)",
+        },
+      ],
+      expectedChecks: {
+        T1: [
+          {
+            id: "constraint:ANALYTICS.CORE.T1.CK_PARENS",
+            name: "CK_PARENS",
+            expression: "(ID >= 0 AND ID <= 100)",
+            validation: "UNKNOWN",
+            name_origin: "unknown",
+          },
+        ],
+      },
+    },
+    {
+      name: "missing checkConstraints key -> []",
+      tables: [
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "T1",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+      ],
+      columns: [column("ANALYTICS", "CORE", "T1", "ID", 1, "NUMBER")],
+      checkConstraints: undefined,
+      expectedChecks: {
+        T1: [],
+      },
+    },
+  ];
+
+  for (const row of metadataCheckRows) {
+    it(`maps checkConstraints for: ${row.name}`, async () => {
+      const { snowflakeMetadataToCanonicalProject, snowflakeMetadataToDiagram } =
+        await loadSnowflakeMetadataMapper();
+      const metadata = {
+        schemata: [
+          { catalog_name: "ANALYTICS", schema_name: "CORE", schema_comment: null },
+        ],
+        tables: row.tables,
+        columns: row.columns,
+        tableConstraints: [],
+        keyColumnUsage: [],
+        referentialConstraints: [],
+      };
+      if (row.checkConstraints !== undefined) {
+        metadata.checkConstraints = row.checkConstraints;
+      }
+      const project = snowflakeMetadataToCanonicalProject(metadata, { name: "TEST" });
+      const diagram = snowflakeMetadataToDiagram(metadata, { title: "TEST" });
+
+      for (const [tableName, expectedList] of Object.entries(row.expectedChecks)) {
+        const canonicalTable = project.physical_model.tables.find(
+          (t) => t.name === tableName,
+        );
+        assert.ok(canonicalTable, `Table ${tableName} must exist in canonical model`);
+        assert.deepEqual(canonicalTable.check_constraints, expectedList);
+
+        const diagramTable = diagram.tables.find((t) => t.name === tableName);
+        assert.ok(diagramTable, `Table ${tableName} must exist in diagram`);
+        const expectedDiagramList = expectedList.map((c) => ({
+          id: c.id,
+          name: c.name,
+          expression: c.expression,
+          validation: c.validation,
+          nameOrigin: c.name_origin,
+        }));
+        assert.deepEqual(diagramTable.checkConstraints, expectedDiagramList);
+      }
+    });
+  }
+
+  it("fails closed when check constraint table is not in selection", async () => {
+    const { snowflakeMetadataToCanonicalProject } =
+      await loadSnowflakeMetadataMapper();
+    const metadata = {
+      schemata: [
+        { catalog_name: "ANALYTICS", schema_name: "CORE", schema_comment: null },
+      ],
       tables: [
         {
           table_catalog: "ANALYTICS",
@@ -764,43 +1005,204 @@ describe("W2A-04 metadata CHECK constraint mapping", () => {
           comment: null,
         },
       ],
-      columns: [
-        column("ANALYTICS", "CORE", "CHECKED", "SCORE", 1, "NUMBER", {
-          numeric_precision: 38,
-          numeric_scale: 0,
-        }),
-      ],
+      columns: [column("ANALYTICS", "CORE", "CHECKED", "SCORE", 1, "NUMBER")],
       tableConstraints: [],
       checkConstraints: [
         {
           constraint_catalog: "ANALYTICS",
           constraint_schema: "CORE",
-          constraint_table: "CHECKED",
-          constraint_name: "CK_CHECKED_SCORE",
+          constraint_table: "UNSELECTED_TABLE",
+          constraint_name: "CK_SCORE",
           check_clause: "SCORE >= 0",
         },
       ],
       keyColumnUsage: [],
       referentialConstraints: [],
     };
-  }
+    assert.throws(
+      () => snowflakeMetadataToCanonicalProject(metadata, { name: "CHECKED" }),
+      /not in the selection/i,
+    );
+  });
 
-  it("maps checkConstraints into canonical check_constraints and diagram checkConstraints", async () => {
-    const { snowflakeMetadataToCanonicalProject, snowflakeMetadataToDiagram } =
+  it("fails closed on blank check constraint name or clause", async () => {
+    const { snowflakeMetadataToCanonicalProject } =
       await loadSnowflakeMetadataMapper();
-    const metadata = checkMetadataFixture();
-    const project = snowflakeMetadataToCanonicalProject(metadata, { name: "CHECKED" });
-    const diagram = snowflakeMetadataToDiagram(metadata, { title: "CHECKED" });
+    const baseMeta = {
+      schemata: [
+        { catalog_name: "ANALYTICS", schema_name: "CORE", schema_comment: null },
+      ],
+      tables: [
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "CHECKED",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+      ],
+      columns: [column("ANALYTICS", "CORE", "CHECKED", "SCORE", 1, "NUMBER")],
+      tableConstraints: [],
+      checkConstraints: [
+        {
+          constraint_catalog: "ANALYTICS",
+          constraint_schema: "CORE",
+          constraint_table: "CHECKED",
+          constraint_name: "CK_SCORE",
+          check_clause: "SCORE >= 0",
+        },
+      ],
+      keyColumnUsage: [],
+      referentialConstraints: [],
+    };
 
-    assert.deepEqual(project.physical_model.tables[0].check_constraints, [
-      {
-        id: "constraint:ANALYTICS.CORE.CHECKED.CK_CHECKED_SCORE",
-        name: "CK_CHECKED_SCORE",
-        expression: "SCORE >= 0",
-        validation: "UNKNOWN",
-        name_origin: "unknown",
-      },
-    ]);
+    const blankName = structuredClone(baseMeta);
+    blankName.checkConstraints[0].constraint_name = "   ";
+    assert.throws(
+      () => snowflakeMetadataToCanonicalProject(blankName, { name: "CHECKED" }),
+      /nonblank/i,
+    );
+
+    const blankClause = structuredClone(baseMeta);
+    blankClause.checkConstraints[0].check_clause = "   ";
+    assert.throws(
+      () => snowflakeMetadataToCanonicalProject(blankClause, { name: "CHECKED" }),
+      /nonblank/i,
+    );
+  });
+
+  it("end-to-end mock service reverseEngineer -> snowflakeMetadataToCanonicalProject -> canonicalProjectToDiagram matches literal", async () => {
+    const database = "ANALYTICS";
+    const schema = "CORE";
+    const tableName = "CHECKED";
+    const tables = [tableName];
+
+    function mockDriver() {
+      const observed = { queries: [] };
+      function rowsFor(sqlText, binds) {
+        const upper = sqlText.toUpperCase();
+        if (upper.includes("CURRENT_ACCOUNT()")) {
+          return [
+            {
+              ACCOUNT: database,
+              USERNAME: "TEST_USER",
+              ROLE: "TEST_ROLE",
+              WAREHOUSE: "TEST_WH",
+            },
+          ];
+        }
+        if (upper.includes(".SCHEMATA")) {
+          return [
+            {
+              CATALOG_NAME: database,
+              SCHEMA_NAME: schema,
+              COMMENT: null,
+            },
+          ];
+        }
+        if (upper.includes(".TABLES")) {
+          return [
+            {
+              TABLE_CATALOG: database,
+              TABLE_SCHEMA: schema,
+              TABLE_NAME: tableName,
+              TABLE_TYPE: "BASE TABLE",
+              COMMENT: null,
+            },
+          ];
+        }
+        if (upper.includes(".COLUMNS")) {
+          return [
+            {
+              TABLE_CATALOG: database,
+              TABLE_SCHEMA: schema,
+              TABLE_NAME: tableName,
+              COLUMN_NAME: "SCORE",
+              ORDINAL_POSITION: 1,
+              COLUMN_DEFAULT: null,
+              IS_NULLABLE: "YES",
+              DATA_TYPE: "NUMBER",
+              CHARACTER_MAXIMUM_LENGTH: null,
+              NUMERIC_PRECISION: 38,
+              NUMERIC_SCALE: 0,
+              DATETIME_PRECISION: null,
+              COMMENT: null,
+            },
+          ];
+        }
+        if (upper.includes(".CHECK_CONSTRAINTS")) {
+          return [
+            {
+              CONSTRAINT_CATALOG: database,
+              CONSTRAINT_SCHEMA: schema,
+              CONSTRAINT_TABLE: tableName,
+              CONSTRAINT_NAME: "CK_CHECKED_SCORE",
+              CHECK_CLAUSE: "SCORE >= 0",
+            },
+          ];
+        }
+        if (upper.includes(".TABLE_CONSTRAINTS")) return [];
+        if (upper.startsWith("SHOW PRIMARY KEYS")) return [];
+        if (upper.startsWith("SHOW UNIQUE KEYS")) return [];
+        if (upper.startsWith("SHOW IMPORTED KEYS")) return [];
+        throw new Error(`Unexpected mock query: ${sqlText}`);
+      }
+
+      const connection = {
+        connect(callback) {
+          queueMicrotask(() => callback());
+        },
+        execute({ sqlText, binds, complete }) {
+          observed.queries.push({ sqlText, binds });
+          queueMicrotask(() => {
+            try {
+              complete(undefined, {}, rowsFor(sqlText, binds));
+            } catch (err) {
+              complete(err, {}, []);
+            }
+          });
+          return { cancel(callback) { callback?.(); } };
+        },
+        destroy(callback) {
+          callback?.();
+        },
+      };
+
+      return {
+        observed,
+        configure() {},
+        createConnection() {
+          return connection;
+        },
+      };
+    }
+
+    const driver = mockDriver();
+    const service = createSnowflakeService({
+      driver,
+      createId: () => "mock-sess-e2e",
+    });
+    await service.connect({
+      mode: "manual",
+      account: database,
+      username: "TEST_USER",
+      password: "test-password",
+    });
+
+    const metadata = await service.reverseEngineer({
+      sessionId: "mock-sess-e2e",
+      database,
+      schema,
+      tables,
+    });
+
+    const { snowflakeMetadataToCanonicalProject } =
+      await loadSnowflakeMetadataMapper();
+    const project = snowflakeMetadataToCanonicalProject(metadata, {
+      name: "CHECKED",
+    });
+    const diagram = canonicalProjectToDiagram(project);
+
     assert.deepEqual(diagram.tables[0].checkConstraints, [
       {
         id: "constraint:ANALYTICS.CORE.CHECKED.CK_CHECKED_SCORE",
@@ -810,32 +1212,5 @@ describe("W2A-04 metadata CHECK constraint mapping", () => {
         nameOrigin: "unknown",
       },
     ]);
-  });
-
-  it("fails closed when check constraint table is not in selection", async () => {
-    const { snowflakeMetadataToCanonicalProject } = await loadSnowflakeMetadataMapper();
-    const metadata = checkMetadataFixture();
-    metadata.checkConstraints[0].constraint_table = "UNKNOWN_TABLE";
-    assert.throws(
-      () => snowflakeMetadataToCanonicalProject(metadata, { name: "CHECKED" }),
-      /not in the selection/i,
-    );
-  });
-
-  it("fails closed on blank check constraint name or clause", async () => {
-    const { snowflakeMetadataToCanonicalProject } = await loadSnowflakeMetadataMapper();
-    const blankName = checkMetadataFixture();
-    blankName.checkConstraints[0].constraint_name = "   ";
-    assert.throws(
-      () => snowflakeMetadataToCanonicalProject(blankName, { name: "CHECKED" }),
-      /nonblank/i,
-    );
-
-    const blankClause = checkMetadataFixture();
-    blankClause.checkConstraints[0].check_clause = "   ";
-    assert.throws(
-      () => snowflakeMetadataToCanonicalProject(blankClause, { name: "CHECKED" }),
-      /nonblank/i,
-    );
   });
 });
