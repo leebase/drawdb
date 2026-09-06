@@ -115,6 +115,7 @@ const DRAWDB_TABLE_KEYS = new Set([
   "collapsed",
   "indices",
   "uniqueConstraints",
+  "checkConstraints",
   "color",
   "inherits",
   "namespace",
@@ -138,6 +139,22 @@ const DRAWDB_FIELD_KEYS = new Set([
 ]);
 const DRAWDB_INDEX_KEYS = new Set(["id", "name", "unique", "fields"]);
 const DRAWDB_UNIQUE_CONSTRAINT_KEYS = new Set(["id", "name", "fields"]);
+const CHECK_CONSTRAINT_KEYS = new Set([
+  "id",
+  "name",
+  "expression",
+  "validation",
+  "name_origin",
+]);
+const DRAWDB_CHECK_CONSTRAINT_KEYS = new Set([
+  "id",
+  "name",
+  "expression",
+  "validation",
+  "nameOrigin",
+]);
+const CHECK_VALIDATION_VALUES = new Set(["VALIDATE", "UNKNOWN"]);
+const CHECK_NAME_ORIGIN_VALUES = new Set(["explicit", "unnamed", "unknown"]);
 const DRAWDB_RELATIONSHIP_KEYS = new Set([
   "id",
   "name",
@@ -564,6 +581,55 @@ function validateDrawdbEntityKeys(document) {
       validateOptional(constraint.id, requireEntityId, `${constraintLabel}.id`);
       requireNonblankString(constraint.name, `${constraintLabel}.name`);
       requireIdArray(constraint.fields, `${constraintLabel}.fields`);
+    });
+    const checkConstraintIds = new Set();
+    requireArray(
+      table.checkConstraints ?? [],
+      `${tableLabel}.checkConstraints`,
+    ).forEach((check, checkIndex) => {
+      const checkLabel = `${tableLabel}.checkConstraints[${checkIndex}]`;
+      rejectUnexpectedKeys(
+        check,
+        DRAWDB_CHECK_CONSTRAINT_KEYS,
+        checkLabel,
+      );
+      requireExactKeys(check, DRAWDB_CHECK_CONSTRAINT_KEYS, checkLabel);
+      const checkId = requireEntityId(check.id, `${checkLabel}.id`);
+      const checkIdStr = String(checkId);
+      if (checkConstraintIds.has(checkIdStr)) {
+        fail(`${checkLabel}.id must be unique`);
+      }
+      checkConstraintIds.add(checkIdStr);
+
+      if (check.name !== null) {
+        requireLegalSnowflakeIdentifier(check.name, `${checkLabel}.name`);
+      }
+
+      if (typeof check.expression !== "string" || !check.expression.trim()) {
+        fail(`${checkLabel}.expression must be a nonblank string`);
+      }
+      if (check.expression !== check.expression.trim()) {
+        fail(`${checkLabel}.expression must be trimmed`);
+      }
+
+      if (!CHECK_VALIDATION_VALUES.has(check.validation)) {
+        fail(`${checkLabel}.validation must be "VALIDATE" or "UNKNOWN"`);
+      }
+
+      if (!CHECK_NAME_ORIGIN_VALUES.has(check.nameOrigin)) {
+        fail(
+          `${checkLabel}.nameOrigin must be "explicit", "unnamed", or "unknown"`,
+        );
+      }
+
+      if (check.nameOrigin === "unnamed" && check.name !== null) {
+        fail(`${checkLabel}: nameOrigin "unnamed" requires name to be null`);
+      }
+      if (check.nameOrigin !== "unnamed" && check.name === null) {
+        fail(
+          `${checkLabel}: nameOrigin "${check.nameOrigin}" requires a non-null name`,
+        );
+      }
     });
     if (table.namespace !== undefined) {
       rejectUnexpectedKeys(
@@ -1003,6 +1069,48 @@ function rejectLegacyFieldChecks(tables) {
   }
 }
 
+function validateCanonicalCheckConstraint(check, index) {
+  const label = `check_constraints[${index}]`;
+  requireObject(check, label);
+  requireExactKeys(check, CHECK_CONSTRAINT_KEYS, label);
+
+  const id = requireNonblankString(check.id, `${label}.id`);
+
+  if (check.name !== null) {
+    requireLegalSnowflakeIdentifier(check.name, `${label}.name`);
+  }
+
+  if (typeof check.expression !== "string" || !check.expression.trim()) {
+    fail(`${label}.expression must be a nonblank string`);
+  }
+  if (check.expression !== check.expression.trim()) {
+    fail(`${label}.expression must be trimmed`);
+  }
+
+  if (!CHECK_VALIDATION_VALUES.has(check.validation)) {
+    fail(`${label}.validation must be "VALIDATE" or "UNKNOWN"`);
+  }
+
+  if (!CHECK_NAME_ORIGIN_VALUES.has(check.name_origin)) {
+    fail(`${label}.name_origin must be "explicit", "unnamed", or "unknown"`);
+  }
+
+  if (check.name_origin === "unnamed" && check.name !== null) {
+    fail(`${label}: name_origin "unnamed" requires name to be null`);
+  }
+  if (check.name_origin !== "unnamed" && check.name === null) {
+    fail(`${label}: name_origin "${check.name_origin}" requires a non-null name`);
+  }
+
+  return {
+    id,
+    name: check.name,
+    expression: check.expression,
+    validation: check.validation,
+    name_origin: check.name_origin,
+  };
+}
+
 function validatePhysicalModelV2(model) {
   requireObject(model, "physical_model");
   requireExactKeys(model, PHYSICAL_MODEL_KEYS, "physical model");
@@ -1077,12 +1185,22 @@ function validatePhysicalModelV2(model) {
       fail("columns must have unique ids");
     }
 
-    const checkConstraints = requireArray(
+    const rawCheckConstraints = requireArray(
       table.check_constraints,
       "check_constraints",
     );
-    if (checkConstraints.length !== 0) {
-      fail("check_constraints must be empty in the model-v2 scaffold");
+    const checkIds = new Set();
+    const checkConstraints = rawCheckConstraints.map((check, cIndex) => {
+      const validated = validateCanonicalCheckConstraint(check, cIndex);
+      if (checkIds.has(validated.id)) {
+        fail(`check_constraints[${cIndex}].id must be unique`);
+      }
+      checkIds.add(validated.id);
+      return validated;
+    });
+    const sortedChecks = sortById(checkConstraints);
+    if (sortedChecks.some((c, i) => c.id !== checkConstraints[i].id)) {
+      fail("check_constraints must be sorted by id");
     }
 
     const constraints = requireArray(table.constraints, "constraints").map(
@@ -1138,7 +1256,7 @@ function validatePhysicalModelV2(model) {
       kind: requireNonblankString(table.kind, "kind"),
       columns,
       constraints,
-      check_constraints: [],
+      check_constraints: checkConstraints,
       comment: requireOptionalString(table.comment, "comment"),
     };
   });
@@ -1430,7 +1548,7 @@ function reconstructDrawdbPhysicalModel(document) {
 function physicalModelsMatch(authoritativeModel, editorModel) {
   // Both values have passed exact v2 validation, so deterministic JSON
   // equality compares every canonical semantic field (including ordered
-  // columns, key columns, relationships, and the empty CHECK scaffold).
+  // columns, key columns, relationships, and table CHECK constraints).
   return JSON.stringify(authoritativeModel) === JSON.stringify(editorModel);
 }
 
@@ -1523,6 +1641,13 @@ export function canonicalProjectToDiagram(project) {
       comment: table.comment || "",
       indices: [],
       uniqueConstraints,
+      checkConstraints: (table.check_constraints || []).map((check) => ({
+        id: check.id,
+        name: check.name,
+        expression: check.expression,
+        validation: check.validation,
+        nameOrigin: check.name_origin,
+      })),
       color: "#175e7a",
       collapsed: false,
       ...(Object.keys(constraintView).length > 0 ? { constraintView } : {}),
@@ -1910,6 +2035,27 @@ export function diagramToCanonicalProject({
       });
     }
 
+    const checkConstraintIds = new Set();
+    const checks = (table.checkConstraints || []).map((check, cIndex) => {
+      const id =
+        check.id !== undefined && check.id !== null && String(check.id).trim()
+          ? String(check.id)
+          : `check-${cIndex + 1}`;
+      if (checkConstraintIds.has(id)) {
+        fail(
+          `duplicate check constraint id ${JSON.stringify(id)} in table ${JSON.stringify(table.name)}`,
+        );
+      }
+      checkConstraintIds.add(id);
+      return {
+        id,
+        name: check.name ?? null,
+        expression: check.expression,
+        validation: check.validation,
+        name_origin: check.nameOrigin,
+      };
+    });
+
     const built = {
       id: newTableId,
       namespace_id: namespace.id,
@@ -1935,7 +2081,7 @@ export function diagramToCanonicalProject({
         }),
       ),
       constraints: sortById(constraints),
-      check_constraints: [],
+      check_constraints: sortById(checks),
       comment:
         table.comment === undefined ||
         table.comment === null ||
@@ -2186,6 +2332,13 @@ function renderInlineConstraint(constraint, table) {
   fail(`unsupported constraint kind ${constraint.kind}`);
 }
 
+function renderCheckConstraint(check) {
+  if (check.name !== null) {
+    return `CONSTRAINT ${check.name} CHECK (${check.expression})`;
+  }
+  return `CHECK (${check.expression})`;
+}
+
 function renderForeignKeyAlter(constraint, model, table, catalog, schema) {
   const localList = constraint.columns
     .map((id) => columnNameById(table, id))
@@ -2352,6 +2505,51 @@ function parseSnowflakeDataType(value, options = {}) {
   }
 }
 
+function scanSnowflakeCheckExpression(text, checkKeywordIndex) {
+  const openParenIndex = text.indexOf("(", checkKeywordIndex);
+  if (openParenIndex === -1) {
+    fail("unsupported Snowflake CHECK constraint: missing opening parenthesis");
+  }
+  let depth = 1;
+  let inString = false;
+  let i = openParenIndex + 1;
+  while (i < text.length) {
+    const char = text[i];
+    if (inString) {
+      if (char === "'" && text[i + 1] === "'") {
+        i += 2;
+        continue;
+      }
+      if (char === "'") {
+        inString = false;
+      }
+    } else {
+      if (char === "'") {
+        inString = true;
+      } else if (char === "(") {
+        depth += 1;
+      } else if (char === ")") {
+        depth -= 1;
+        if (depth === 0) {
+          const rawExpr = text.slice(openParenIndex + 1, i);
+          const expr = rawExpr.trim();
+          if (!expr) {
+            fail("CHECK constraint expression must not be empty");
+          }
+          return {
+            expression: expr,
+            endIndex: i + 1,
+          };
+        }
+      }
+    }
+    i += 1;
+  }
+  fail(
+    "unsupported Snowflake CHECK constraint: unterminated parentheses or string literal",
+  );
+}
+
 function isSnowflakeWordBoundary(value, index) {
   return index < 0 || index >= value.length || !/[A-Z0-9_$]/i.test(value[index]);
 }
@@ -2371,6 +2569,16 @@ function readSnowflakeColumnClause(rest, index) {
     ) {
       return { kind, start: index, end: index + kind.length };
     }
+  }
+  const checkMatch = remaining.match(/^CHECK\s*\(/i);
+  if (checkMatch && isSnowflakeWordBoundary(rest, index - 1)) {
+    const scanResult = scanSnowflakeCheckExpression(rest, index);
+    return {
+      kind: "CHECK",
+      start: index,
+      end: scanResult.endIndex,
+      expression: scanResult.expression,
+    };
   }
   return null;
 }
@@ -2415,7 +2623,6 @@ function unsupportedSnowflakeColumnFeature(rest) {
     "PRIMARY",
     "UNIQUE",
     "REFERENCES",
-    "CHECK",
     "COLLATE",
     "IDENTITY",
     "AUTOINCREMENT",
@@ -2457,12 +2664,13 @@ function parseSnowflakeColumnClauses(rest, columnName) {
   let nullable = true;
   let defaultValue = null;
   let comment = null;
+  let checkConstraint = null;
   const clauses = snowflakeColumnClauseStarts(rest);
   if (clauses.length === 0) {
     if (rest.trim()) {
       fail(`unsupported Snowflake column clause on ${columnName}: ${rest.trim()}`);
     }
-    return { nullable, defaultValue, comment };
+    return { nullable, defaultValue, comment, checkConstraint };
   }
   if (rest.slice(0, clauses[0].start).trim()) {
     fail(
@@ -2489,9 +2697,17 @@ function parseSnowflakeColumnClauses(rest, columnName) {
         fail(`unsupported Snowflake column comment on ${columnName}`);
       }
       comment = sqlStringLiteralValue(value);
+    } else if (clause.kind === "CHECK") {
+      if (checkConstraint !== null) {
+        fail(`duplicate CHECK clause on ${columnName}`);
+      }
+      if (value) {
+        fail(`unsupported Snowflake column clause on ${columnName}: ${value}`);
+      }
+      checkConstraint = { expression: clause.expression };
     }
   });
-  return { nullable, defaultValue, comment };
+  return { nullable, defaultValue, comment, checkConstraint };
 }
 
 function splitSnowflakeColumnTypeAndRest(afterName) {
@@ -2539,20 +2755,21 @@ function parseSnowflakeColumnDefinition(
   if (unsupportedSnowflakeColumnFeature(rawRest)) {
     fail(`unsupported Snowflake column feature on ${name}`);
   }
-  const { nullable, defaultValue, comment } = parseSnowflakeColumnClauses(
-    rawRest.trim(),
-    name,
-  );
+  const { nullable, defaultValue, comment, checkConstraint } =
+    parseSnowflakeColumnClauses(rawRest.trim(), name);
 
   const [catalog, schema, tableName] = tableParts;
   return {
-    id: columnId(catalog, schema, tableName, name),
-    name,
-    ordinal,
-    data_type: parseSnowflakeDataType(rawType, options),
-    nullable,
-    default: defaultValue,
-    comment,
+    column: {
+      id: columnId(catalog, schema, tableName, name),
+      name,
+      ordinal,
+      data_type: parseSnowflakeDataType(rawType, options),
+      nullable,
+      default: defaultValue,
+      comment,
+    },
+    checkConstraint,
   };
 }
 
@@ -2596,15 +2813,66 @@ function parseSnowflakeCreateTable(statement, options = {}) {
   const tableParts = [catalog, schema, name];
   const columns = [];
   const constraints = [];
+  const checkConstraints = [];
+  let unnamedCheckCount = 0;
   const columnsByName = new Map();
   splitSnowflakeTopLevelList(body).forEach((definition) => {
+    const trimmedDef = definition.trim();
+    const namedCheckMatch = trimmedDef.match(
+      /^CONSTRAINT\s+([A-Z_][A-Z0-9_$]*)\s+CHECK\s*\(/i,
+    );
+    if (namedCheckMatch) {
+      const [, rawConstraintName] = namedCheckMatch;
+      const constraintName = parseSnowflakeIdentifier(
+        rawConstraintName,
+        "constraint",
+      );
+      const afterConstraintName =
+        trimmedDef.toUpperCase().indexOf(rawConstraintName.toUpperCase()) +
+        rawConstraintName.length;
+      const checkKeywordIndex = trimmedDef
+        .toUpperCase()
+        .indexOf("CHECK", afterConstraintName);
+      const scanResult = scanSnowflakeCheckExpression(
+        trimmedDef,
+        checkKeywordIndex,
+      );
+      const remainder = trimmedDef.slice(scanResult.endIndex).trim();
+      if (remainder) {
+        fail(`unsupported Snowflake CHECK constraint: unexpected ${remainder}`);
+      }
+      checkConstraints.push({
+        id: constraintId(catalog, schema, name, constraintName),
+        name: constraintName,
+        expression: scanResult.expression,
+        validation: "VALIDATE",
+        name_origin: "explicit",
+      });
+      return;
+    }
+    if (/^CHECK\s*\(/i.test(trimmedDef)) {
+      const scanResult = scanSnowflakeCheckExpression(trimmedDef, 0);
+      const remainder = trimmedDef.slice(scanResult.endIndex).trim();
+      if (remainder) {
+        fail(`unsupported Snowflake CHECK constraint: unexpected ${remainder}`);
+      }
+      unnamedCheckCount += 1;
+      checkConstraints.push({
+        id: `check:${catalog}.${schema}.${name}#${unnamedCheckCount}`,
+        name: null,
+        expression: scanResult.expression,
+        validation: "VALIDATE",
+        name_origin: "unnamed",
+      });
+      return;
+    }
     if (/^CONSTRAINT\s+/i.test(definition)) {
       constraints.push(
         parseSnowflakeInlineConstraint(definition, tableParts, columnsByName),
       );
       return;
     }
-    const column = parseSnowflakeColumnDefinition(
+    const { column, checkConstraint } = parseSnowflakeColumnDefinition(
       definition,
       tableParts,
       columns.length + 1,
@@ -2615,6 +2883,16 @@ function parseSnowflakeCreateTable(statement, options = {}) {
     }
     columnsByName.set(column.name, column);
     columns.push(column);
+    if (checkConstraint) {
+      unnamedCheckCount += 1;
+      checkConstraints.push({
+        id: `check:${catalog}.${schema}.${name}#${unnamedCheckCount}`,
+        name: null,
+        expression: checkConstraint.expression,
+        validation: "VALIDATE",
+        name_origin: "unnamed",
+      });
+    }
   });
   if (columns.length === 0) fail(`table ${name} must have columns`);
   return {
@@ -2626,7 +2904,7 @@ function parseSnowflakeCreateTable(statement, options = {}) {
       kind: "table",
       columns,
       constraints,
-      check_constraints: [],
+      check_constraints: sortById(checkConstraints),
       comment: rawComment === undefined ? null : sqlStringLiteralValue(rawComment),
     },
   };
@@ -2719,11 +2997,64 @@ export function parseSnowflakeDDLToCanonicalProject(sql, options = {}) {
       tableByName.set(`${namespace.catalog}.${namespace.schema}.${table.name}`, table);
       tables.push(table);
     } else if (/^ALTER\s+TABLE\s+/i.test(statement)) {
-      const { sourceTable, constraint } = parseSnowflakeForeignKeyAlter(
-        statement,
-        tableByName,
+      const checkAlterMatch = statement.match(
+        /^ALTER\s+TABLE\s+([A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*\.[A-Z_][A-Z0-9_$]*)\s+ADD\s+(?:CONSTRAINT\s+([A-Z_][A-Z0-9_$]*)\s+)?CHECK\s*\(/i,
       );
-      sourceTable.constraints.push(constraint);
+      if (checkAlterMatch) {
+        const [, rawTable, rawConstraintName] = checkAlterMatch;
+        const [catalog, schema, tableName] = parseQualifiedSnowflakeName(
+          rawTable,
+          3,
+          "table",
+        );
+        const sourceTable = tableByName.get(`${catalog}.${schema}.${tableName}`);
+        if (!sourceTable) {
+          fail(`ALTER TABLE references unknown table ${rawTable}`);
+        }
+        const addIndex = statement.toUpperCase().indexOf("ADD");
+        let checkIndex;
+        if (rawConstraintName) {
+          const afterConstraint =
+            statement.toUpperCase().indexOf(rawConstraintName.toUpperCase(), addIndex) +
+            rawConstraintName.length;
+          checkIndex = statement.toUpperCase().indexOf("CHECK", afterConstraint);
+        } else {
+          checkIndex = statement.toUpperCase().indexOf("CHECK", addIndex);
+        }
+        const scanResult = scanSnowflakeCheckExpression(statement, checkIndex);
+        const remainder = statement.slice(scanResult.endIndex).trim();
+        if (remainder) {
+          fail(
+            `unsupported Snowflake ALTER TABLE statement: unexpected ${remainder}`,
+          );
+        }
+        if (rawConstraintName) {
+          const name = parseSnowflakeIdentifier(rawConstraintName, "constraint");
+          sourceTable.check_constraints.push({
+            id: constraintId(catalog, schema, tableName, name),
+            name,
+            expression: scanResult.expression,
+            validation: "VALIDATE",
+            name_origin: "explicit",
+          });
+        } else {
+          const unnamedCount =
+            sourceTable.check_constraints.filter((c) => c.name === null).length + 1;
+          sourceTable.check_constraints.push({
+            id: `check:${catalog}.${schema}.${tableName}#${unnamedCount}`,
+            name: null,
+            expression: scanResult.expression,
+            validation: "VALIDATE",
+            name_origin: "unnamed",
+          });
+        }
+      } else {
+        const { sourceTable, constraint } = parseSnowflakeForeignKeyAlter(
+          statement,
+          tableByName,
+        );
+        sourceTable.constraints.push(constraint);
+      }
     } else {
       fail(`unsupported Snowflake DDL statement: ${statement.slice(0, 60)}`);
     }
@@ -2733,6 +3064,7 @@ export function parseSnowflakeDDLToCanonicalProject(sql, options = {}) {
     tables.map((table) => ({
       ...table,
       constraints: sortById(table.constraints),
+      check_constraints: sortById(table.check_constraints),
     })),
   );
   const relationships = sortById(
@@ -2835,6 +3167,9 @@ export function renderCanonicalSnowflakeDDL(projectOrModel) {
         .map(
           (constraint) => `    ${renderInlineConstraint(constraint, table)}`,
         ),
+      ...(table.check_constraints || []).map(
+        (check) => `    ${renderCheckConstraint(check)}`,
+      ),
     ];
     bodyLines.forEach((bodyLine, bodyIndex) => {
       const suffix = bodyIndex < bodyLines.length - 1 ? "," : "";
@@ -2904,6 +3239,9 @@ export function renderCanonicalSnowflakeStatements(
       ...table.constraints
         .filter((constraint) => constraint.kind !== "foreign_key")
         .map((constraint) => `    ${renderInlineConstraint(constraint, table)}`),
+      ...(table.check_constraints || []).map(
+        (check) => `    ${renderCheckConstraint(check)}`,
+      ),
     ];
     bodyLines.forEach((bodyLine, bodyIndex) => {
       const suffix = bodyIndex < bodyLines.length - 1 ? "," : "";

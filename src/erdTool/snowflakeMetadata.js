@@ -8,7 +8,7 @@ import {
 } from "./snowflakeTypeContract.js";
 
 const PROJECT_VERSION = "1";
-const MODEL_VERSION = "1";
+const MODEL_VERSION = "2";
 const FALLBACK_X_STEP = 280;
 const FALLBACK_Y = 80;
 const IDENTIFIER_RE = /^[A-Z_][A-Z0-9_$]*$/;
@@ -172,6 +172,8 @@ function canonicalDataType(column) {
     precision: resolvedPrecision,
     scale: resolvedScale,
     length: resolvedLength,
+    vector_element_type: null,
+    vector_dimension: null,
   };
 }
 
@@ -346,7 +348,70 @@ function toProjectConstraint(constraint) {
   return projectConstraint;
 }
 
-function buildTables(metadata, tableRows, constraintsByTable) {
+function buildCheckConstraints(metadata, tablesByKey) {
+  const checksByTable = new Map();
+  const rawRows = metadata.checkConstraints === undefined ? [] : rows(metadata.checkConstraints, "checkConstraints");
+
+  for (const row of rawRows) {
+    if (row === null || typeof row !== "object" || Array.isArray(row)) {
+      fail("checkConstraint row must be an object");
+    }
+    const catalog = identifier(
+      row.constraint_catalog,
+      "checkConstraint.constraint_catalog",
+    );
+    const schema = identifier(
+      row.constraint_schema,
+      "checkConstraint.constraint_schema",
+    );
+    const tableName = identifier(
+      row.constraint_table,
+      "checkConstraint.constraint_table",
+    );
+    const tableKey = objectKey(catalog, schema, tableName);
+    if (!tablesByKey.has(tableKey)) {
+      fail(
+        `check constraint references table ${catalog}.${schema}.${tableName} which is not in the selection`,
+      );
+    }
+    if (typeof row.constraint_name !== "string" || !row.constraint_name.trim()) {
+      fail("check constraint name must be a nonblank string");
+    }
+    const name = identifier(
+      row.constraint_name,
+      "checkConstraint.constraint_name",
+    );
+    if (typeof row.check_clause !== "string" || !row.check_clause.trim()) {
+      fail("check constraint check_clause must be a nonblank string");
+    }
+    const expression = row.check_clause.trim();
+
+    const check = {
+      id: constraintId(catalog, schema, tableName, name),
+      name,
+      expression,
+      validation: "UNKNOWN",
+      name_origin: "unknown",
+    };
+
+    if (!checksByTable.has(tableKey)) {
+      checksByTable.set(tableKey, []);
+    }
+    const existing = checksByTable.get(tableKey);
+    if (existing.some((c) => c.id === check.id)) {
+      fail(`duplicate check constraint id ${check.id}`);
+    }
+    existing.push(check);
+  }
+
+  for (const checks of checksByTable.values()) {
+    checks.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+  }
+
+  return checksByTable;
+}
+
+function buildTables(metadata, tableRows, constraintsByTable, checkConstraintsByTable) {
   const columnsByTable = new Map();
   for (const row of rows(metadata.columns, "columns")) {
     const catalog = identifier(row.table_catalog, "column.table_catalog");
@@ -395,6 +460,7 @@ function buildTables(metadata, tableRows, constraintsByTable) {
         constraints: (constraintsByTable.get(key) ?? []).map(
           toProjectConstraint,
         ),
+        check_constraints: sortById(checkConstraintsByTable.get(key) ?? []),
         comment: optionalString(tableRow.comment),
       };
     }),
@@ -446,7 +512,13 @@ export function snowflakeMetadataToCanonicalProject(metadata, options = {}) {
     ),
   );
   const constraintsByTable = buildConstraintIndexes(source, tablesByKey);
-  const tables = buildTables(source, tableRows, constraintsByTable);
+  const checkConstraintsByTable = buildCheckConstraints(source, tablesByKey);
+  const tables = buildTables(
+    source,
+    tableRows,
+    constraintsByTable,
+    checkConstraintsByTable,
+  );
   const project = {
     project_version: PROJECT_VERSION,
     physical_model: {

@@ -319,7 +319,15 @@ function keyUsage(catalog, schema, table, constraintName, columnName, ordinal) {
 }
 
 function type(family, text, precision = null, scale = null, length = null) {
-  return { family, text, precision, scale, length };
+  return {
+    family,
+    text,
+    precision,
+    scale,
+    length,
+    vector_element_type: null,
+    vector_dimension: null,
+  };
 }
 
 function expectedCanonicalProject() {
@@ -345,6 +353,7 @@ function expectedCanonicalProject() {
         modelConstraint("ANALYTICS", "CORE", "CUSTOMER", "PK_CUSTOMER", "primary_key", ["CUSTOMER_ID"]),
         modelConstraint("ANALYTICS", "CORE", "CUSTOMER", "UQ_CUSTOMER_EMAIL", "unique", ["EMAIL"]),
       ],
+      check_constraints: [],
       comment: "Customer dimension",
     },
     {
@@ -367,6 +376,7 @@ function expectedCanonicalProject() {
         },
         modelConstraint("ANALYTICS", "MART", "ORDER_FACT", "PK_ORDER_FACT", "primary_key", ["ORDER_ID"]),
       ],
+      check_constraints: [],
       comment: "Order facts",
     },
     {
@@ -381,6 +391,7 @@ function expectedCanonicalProject() {
       constraints: [
         modelConstraint("OPS", "SECURITY", "ALERT_EVENT", "PK_ALERT_EVENT", "primary_key", ["EVENT_ID"]),
       ],
+      check_constraints: [],
       comment: "Security alert stream",
     },
   ];
@@ -388,7 +399,7 @@ function expectedCanonicalProject() {
   return {
     project_version: "1",
     physical_model: {
-      model_version: "1",
+      model_version: "2",
       name: "mocked-snowflake-metadata",
       namespaces,
       tables,
@@ -416,21 +427,7 @@ function expectedCanonicalProject() {
 }
 
 function expectedSavedCanonicalProject() {
-  const expected = expectedCanonicalProject();
-  expected.physical_model.model_version = "2";
-  expected.physical_model.tables = expected.physical_model.tables.map((table) => ({
-    ...table,
-    columns: table.columns.map((column) => ({
-      ...column,
-      data_type: {
-        ...column.data_type,
-        vector_element_type: null,
-        vector_dimension: null,
-      },
-    })),
-    check_constraints: [],
-  }));
-  return expected;
+  return expectedCanonicalProject();
 }
 
 function modelColumn(catalog, schema, table, name, ordinal, dataType, nullable, defaultValue = null, comment = null) {
@@ -750,6 +747,95 @@ describe("W2A-03 metadata type-token normalization", () => {
     assert.throws(
       () => snowflakeMetadataToCanonicalProject(singleColumnMetadata("DECFLOAT"), { name: "T" }),
       /unsupported/i,
+    );
+  });
+});
+
+describe("W2A-04 metadata CHECK constraint mapping", () => {
+  function checkMetadataFixture() {
+    return {
+      schemata: [{ catalog_name: "ANALYTICS", schema_name: "CORE", schema_comment: null }],
+      tables: [
+        {
+          table_catalog: "ANALYTICS",
+          table_schema: "CORE",
+          table_name: "CHECKED",
+          table_type: "BASE TABLE",
+          comment: null,
+        },
+      ],
+      columns: [
+        column("ANALYTICS", "CORE", "CHECKED", "SCORE", 1, "NUMBER", {
+          numeric_precision: 38,
+          numeric_scale: 0,
+        }),
+      ],
+      tableConstraints: [],
+      checkConstraints: [
+        {
+          constraint_catalog: "ANALYTICS",
+          constraint_schema: "CORE",
+          constraint_table: "CHECKED",
+          constraint_name: "CK_CHECKED_SCORE",
+          check_clause: "SCORE >= 0",
+        },
+      ],
+      keyColumnUsage: [],
+      referentialConstraints: [],
+    };
+  }
+
+  it("maps checkConstraints into canonical check_constraints and diagram checkConstraints", async () => {
+    const { snowflakeMetadataToCanonicalProject, snowflakeMetadataToDiagram } =
+      await loadSnowflakeMetadataMapper();
+    const metadata = checkMetadataFixture();
+    const project = snowflakeMetadataToCanonicalProject(metadata, { name: "CHECKED" });
+    const diagram = snowflakeMetadataToDiagram(metadata, { title: "CHECKED" });
+
+    assert.deepEqual(project.physical_model.tables[0].check_constraints, [
+      {
+        id: "constraint:ANALYTICS.CORE.CHECKED.CK_CHECKED_SCORE",
+        name: "CK_CHECKED_SCORE",
+        expression: "SCORE >= 0",
+        validation: "UNKNOWN",
+        name_origin: "unknown",
+      },
+    ]);
+    assert.deepEqual(diagram.tables[0].checkConstraints, [
+      {
+        id: "constraint:ANALYTICS.CORE.CHECKED.CK_CHECKED_SCORE",
+        name: "CK_CHECKED_SCORE",
+        expression: "SCORE >= 0",
+        validation: "UNKNOWN",
+        nameOrigin: "unknown",
+      },
+    ]);
+  });
+
+  it("fails closed when check constraint table is not in selection", async () => {
+    const { snowflakeMetadataToCanonicalProject } = await loadSnowflakeMetadataMapper();
+    const metadata = checkMetadataFixture();
+    metadata.checkConstraints[0].constraint_table = "UNKNOWN_TABLE";
+    assert.throws(
+      () => snowflakeMetadataToCanonicalProject(metadata, { name: "CHECKED" }),
+      /not in the selection/i,
+    );
+  });
+
+  it("fails closed on blank check constraint name or clause", async () => {
+    const { snowflakeMetadataToCanonicalProject } = await loadSnowflakeMetadataMapper();
+    const blankName = checkMetadataFixture();
+    blankName.checkConstraints[0].constraint_name = "   ";
+    assert.throws(
+      () => snowflakeMetadataToCanonicalProject(blankName, { name: "CHECKED" }),
+      /nonblank/i,
+    );
+
+    const blankClause = checkMetadataFixture();
+    blankClause.checkConstraints[0].check_clause = "   ";
+    assert.throws(
+      () => snowflakeMetadataToCanonicalProject(blankClause, { name: "CHECKED" }),
+      /nonblank/i,
     );
   });
 });

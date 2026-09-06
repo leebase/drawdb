@@ -119,6 +119,9 @@ function fakeDriver({ connectionError } = {}) {
         column("ARTIST", "NAME", 2, "TEXT", true),
       ];
     }
+    if (sqlText.includes(".CHECK_CONSTRAINTS")) {
+      return [];
+    }
     if (sqlText.includes(".TABLE_CONSTRAINTS")) {
       return [
         constraint("ALBUM", "PK_ALBUM", "PRIMARY KEY"),

@@ -882,6 +882,21 @@ describe("SS-015 Terraform round-trip engineering", () => {
       () => canonicalProjectToTerraformHcl(invalid),
       /unsupported type family XML/i,
     );
+
+    const withCheck = structuredClone(project);
+    withCheck.physical_model.tables[0].check_constraints = [
+      {
+        id: "constraint:ANALYTICS.CORE.CUSTOMER.CK_CUSTOMER_ID",
+        name: "CK_CUSTOMER_ID",
+        expression: "CUSTOMER_ID > 0",
+        validation: "VALIDATE",
+        name_origin: "explicit",
+      },
+    ];
+    assert.throws(
+      () => canonicalProjectToTerraformHcl(withCheck),
+      /CHECK/,
+    );
   });
 
   it("round-trips supported Terraform semantics without changing canonical meaning", async () => {
@@ -1062,6 +1077,28 @@ resource "snowflake_table" "default_cases" {
         "unsupported data source",
         'data "snowflake_database" "analytics" { name = "ANALYTICS" }',
         /unsupported Terraform block data/i,
+      ],
+      [
+        "unsupported check constraint",
+        `
+resource "snowflake_table" "t" {
+  database = "ANALYTICS"
+  schema   = "CORE"
+  name     = "T"
+  column { name = "ID" type = "NUMBER(38, 0)" }
+}
+resource "snowflake_table_constraint" "chk" {
+  name     = "CHK"
+  type     = "CHECK"
+  table_id = snowflake_table.t.fully_qualified_name
+  columns  = ["ID"]
+}`,
+        /unsupported Terraform table constraint type CHECK/i,
+      ],
+      [
+        "unsupported check block",
+        'check "health_check" { data "snowflake_table" "t" {} }',
+        /unsupported Terraform block check/i,
       ],
       [
         "unsupported module",

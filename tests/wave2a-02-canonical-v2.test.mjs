@@ -703,7 +703,7 @@ describe("Wave 2A canonical v2 migration scaffold", () => {
     nonemptyChecks.physical_model.tables[0].check_constraints = [{}];
     assert.throws(
       () => canonicalProjectToDiagram(nonemptyChecks),
-      /check_constraints.*empty/i,
+      /check_constraints\[0\]/i,
     );
 
     const nonVectorParameters = v2Project();

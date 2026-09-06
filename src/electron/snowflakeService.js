@@ -644,6 +644,11 @@ export function createSnowflakeService({
         tableBinds,
         )
       ).map(normalizeColumnType);
+      const checkConstraints = await executeRows(
+        connection,
+        `SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_TABLE, CONSTRAINT_NAME, CHECK_CLAUSE FROM ${informationSchema}.CHECK_CONSTRAINTS WHERE CONSTRAINT_CATALOG = ? AND CONSTRAINT_SCHEMA = ? AND CONSTRAINT_TABLE IN (${placeholders}) ORDER BY CONSTRAINT_TABLE, CONSTRAINT_NAME`,
+        [database, schema, ...tables],
+      );
       const tableConstraints = await executeRows(
         connection,
         `SELECT CONSTRAINT_CATALOG, CONSTRAINT_SCHEMA, CONSTRAINT_NAME, TABLE_CATALOG, TABLE_SCHEMA, TABLE_NAME, CONSTRAINT_TYPE FROM ${informationSchema}.TABLE_CONSTRAINTS WHERE ${tableFilter} AND CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY') ORDER BY TABLE_NAME, CONSTRAINT_NAME`,
@@ -742,6 +747,7 @@ export function createSnowflakeService({
         tables: tableRows,
         columns,
         tableConstraints: selectedTableConstraints,
+        checkConstraints,
         keyColumnUsage,
         referentialConstraints,
       };

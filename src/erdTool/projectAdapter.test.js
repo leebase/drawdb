@@ -2750,3 +2750,589 @@ describe("constraint uniqueness and required namespaces", () => {
     );
   });
 });
+
+describe("W2A-04 Snowflake CHECK constraint fidelity", () => {
+  function v2CheckProject(checkConstraints = [], tableOverrides = {}) {
+    return {
+      project_version: "1",
+      physical_model: {
+        model_version: "2",
+        name: "CHECK_TEST_MODEL",
+        namespaces: [
+          {
+            id: "namespace:ANALYTICS.CORE",
+            catalog: "ANALYTICS",
+            schema: "CORE",
+          },
+        ],
+        tables: [
+          {
+            id: "table:ANALYTICS.CORE.TEST_TABLE",
+            namespace_id: "namespace:ANALYTICS.CORE",
+            name: "TEST_TABLE",
+            kind: "table",
+            columns: [
+              {
+                id: "column:ANALYTICS.CORE.TEST_TABLE.ID",
+                name: "ID",
+                ordinal: 1,
+                data_type: {
+                  family: "NUMBER",
+                  text: "NUMBER(38, 0)",
+                  precision: 38,
+                  scale: 0,
+                  length: null,
+                  vector_element_type: null,
+                  vector_dimension: null,
+                },
+                nullable: false,
+                default: null,
+                comment: null,
+              },
+            ],
+            constraints: [],
+            check_constraints: checkConstraints,
+            comment: null,
+            ...tableOverrides,
+          },
+        ],
+        relationships: [],
+      },
+    };
+  }
+
+  function checkDiagram(checks = []) {
+    return {
+      database: "snowflake",
+      title: "CHECK_DIAGRAM",
+      tables: [
+        {
+          id: "tbl-1",
+          name: "TEST_TABLE",
+          x: 0,
+          y: 0,
+          namespace: {
+            id: "namespace:ANALYTICS.CORE",
+            catalog: "ANALYTICS",
+            schema: "CORE",
+          },
+          fields: [
+            {
+              id: "fld-1",
+              name: "ID",
+              type: "NUMBER",
+              size: "38,0",
+              default: "",
+              check: "",
+              primary: true,
+              unique: false,
+              notNull: true,
+              increment: false,
+              comment: "",
+            },
+          ],
+          checkConstraints: checks,
+        },
+      ],
+      relationships: [],
+      transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+    };
+  }
+
+  it("validates canonical CHECK entries and rejects malformed entries", () => {
+    // Positive cases
+    const validNamed = {
+      id: "ck-1",
+      name: "CK_ID_POSITIVE",
+      expression: "ID > 0",
+      validation: "VALIDATE",
+      name_origin: "explicit",
+    };
+    const validUnnamed = {
+      id: "ck-2",
+      name: null,
+      expression: "ID <= 100",
+      validation: "VALIDATE",
+      name_origin: "unnamed",
+    };
+    const validUnknown = {
+      id: "ck-3",
+      name: "CK_ID_META",
+      expression: "ID != 0",
+      validation: "UNKNOWN",
+      name_origin: "unknown",
+    };
+    assert.doesNotThrow(() =>
+      canonicalProjectToDiagram(
+        v2CheckProject([validNamed, validUnnamed, validUnknown]),
+      ),
+    );
+
+    // Negative: missing required keys
+    for (const key of [
+      "id",
+      "name",
+      "expression",
+      "validation",
+      "name_origin",
+    ]) {
+      const bad = { ...validNamed };
+      delete bad[key];
+      assert.throws(
+        () => canonicalProjectToDiagram(v2CheckProject([bad])),
+        new RegExp(`check_constraints\\[0\\] is missing required ${key}`),
+      );
+    }
+
+    // Negative: unexpected extra keys
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, unexpected: true }]),
+        ),
+      /check_constraints\[0\] has unexpected field unexpected/,
+    );
+
+    // Negative: invalid/blank name
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, name: "" }]),
+        ),
+      /check_constraints\[0\].name must be a nonblank string/,
+    );
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, name: "lowercase_name" }]),
+        ),
+      /check_constraints\[0\].name must be a legal uppercase unquoted Snowflake identifier/,
+    );
+
+    // Negative: name_origin rules
+    // unnamed must have null name
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validUnnamed, name: "CK_NAMED" }]),
+        ),
+      /check_constraints\[0\]: name_origin "unnamed" requires name to be null/,
+    );
+    // explicit requires non-null name
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, name: null }]),
+        ),
+      /check_constraints\[0\]: name_origin "explicit" requires a non-null name/,
+    );
+    // unknown requires non-null name
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validUnknown, name: null }]),
+        ),
+      /check_constraints\[0\]: name_origin "unknown" requires a non-null name/,
+    );
+
+    // Negative: invalid validation enum
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, validation: "INVALID" }]),
+        ),
+      /check_constraints\[0\].validation must be "VALIDATE" or "UNKNOWN"/,
+    );
+
+    // Negative: invalid name_origin enum
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, name_origin: "custom" }]),
+        ),
+      /check_constraints\[0\].name_origin must be "explicit", "unnamed", or "unknown"/,
+    );
+
+    // Negative: expression validation
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, expression: "  ID > 0  " }]),
+        ),
+      /check_constraints\[0\].expression must be trimmed/,
+    );
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, expression: "" }]),
+        ),
+      /check_constraints\[0\].expression must be a nonblank string/,
+    );
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([{ ...validNamed, expression: 123 }]),
+        ),
+      /check_constraints\[0\].expression must be a nonblank string/,
+    );
+
+    // Negative: duplicate IDs within table
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([
+            { ...validNamed, id: "dup-id" },
+            { ...validUnnamed, id: "dup-id" },
+          ]),
+        ),
+      /check_constraints\[1\].id must be unique/,
+    );
+
+    // Negative: unsorted entries
+    assert.throws(
+      () =>
+        canonicalProjectToDiagram(
+          v2CheckProject([
+            { ...validNamed, id: "z-id" },
+            { ...validUnnamed, id: "a-id" },
+          ]),
+        ),
+      /check_constraints must be sorted by id/,
+    );
+  });
+
+  it("preserves legacy nonblank field.check behavior", () => {
+    const diag = checkDiagram();
+    diag.tables[0].fields[0].check = "ID > 0";
+    assert.throws(
+      () => diagramToCanonicalProject(diag),
+      (err) => {
+        assert.equal(err.code, "LEGACY_FIELD_CHECK_UNSUPPORTED");
+        assert.match(
+          err.message,
+          /Legacy field\.check requires explicit migration/,
+        );
+        return true;
+      },
+    );
+  });
+
+  it("maps check constraints bidirectionally between diagram and canonical models", () => {
+    const editorChecks = [
+      {
+        id: "check-1",
+        name: "CK_TEST_ID",
+        expression: "ID > 0",
+        validation: "VALIDATE",
+        nameOrigin: "explicit",
+      },
+      {
+        id: "check-2",
+        name: null,
+        expression: "ID < 100",
+        validation: "VALIDATE",
+        nameOrigin: "unnamed",
+      },
+    ];
+
+    const diag = checkDiagram(editorChecks);
+    const canonical = diagramToCanonicalProject(diag);
+    assert.deepEqual(canonical.physical_model.tables[0].check_constraints, [
+      {
+        id: "check-1",
+        name: "CK_TEST_ID",
+        expression: "ID > 0",
+        validation: "VALIDATE",
+        name_origin: "explicit",
+      },
+      {
+        id: "check-2",
+        name: null,
+        expression: "ID < 100",
+        validation: "VALIDATE",
+        name_origin: "unnamed",
+      },
+    ]);
+
+    // Canonical to diagram mapping
+    delete canonical.drawdb_document;
+    const reopenedDiagram = canonicalProjectToDiagram(canonical);
+    assert.deepEqual(reopenedDiagram.tables[0].checkConstraints, editorChecks);
+  });
+
+  it("validates checkConstraints in the drawdb_document validator", () => {
+    const diag = checkDiagram([
+      {
+        id: "c1",
+        name: "CK_1",
+        expression: "ID > 0",
+        validation: "VALIDATE",
+        nameOrigin: "explicit",
+        extra: "bad",
+      },
+    ]);
+    assert.throws(
+      () => diagramToCanonicalProject(diag),
+      /drawdb_document\.tables\[0\]\.checkConstraints\[0\] has unexpected field extra/,
+    );
+  });
+
+  it("renders deterministic DDL for named and unnamed CHECK constraints without disable grammar", () => {
+    const checks = [
+      {
+        id: "check-1",
+        name: "CK_ID_BOUNDS",
+        expression: "ID >= 1 AND ID <= 100",
+        validation: "VALIDATE",
+        name_origin: "explicit",
+      },
+      {
+        id: "check-2",
+        name: null,
+        expression: "ID % 2 = 0",
+        validation: "VALIDATE",
+        name_origin: "unnamed",
+      },
+    ];
+    const project = v2CheckProject(checks);
+    const ddl = renderCanonicalSnowflakeDDL(project);
+    assert.match(
+      ddl,
+      /CONSTRAINT CK_ID_BOUNDS CHECK \(ID >= 1 AND ID <= 100\)/,
+    );
+    assert.match(ddl, /CHECK \(ID % 2 = 0\)/);
+    assert.doesNotMatch(
+      ddl,
+      /\b(?:NOT\s+ENFORCED|RELY|DISABLE)\b/i,
+      "CHECK constraints must not have NOT ENFORCED, RELY, or DISABLE",
+    );
+    assert.equal(ddl, renderCanonicalSnowflakeDDL(project));
+  });
+
+  it("parses all four DDL check forms: named, unnamed, column inline, and ALTER ADD", () => {
+    const ddl = `
+CREATE DATABASE IF NOT EXISTS ANALYTICS;
+CREATE SCHEMA IF NOT EXISTS ANALYTICS.CORE;
+
+CREATE TABLE ANALYTICS.CORE.T1 (
+    ID NUMBER(38, 0) NOT NULL CHECK (ID > 0),
+    RATE NUMBER(5, 2) NOT NULL,
+    CONSTRAINT CK_T1_RATE CHECK (RATE >= 0.0),
+    CHECK (RATE <= 100.0)
+);
+
+ALTER TABLE ANALYTICS.CORE.T1 ADD CONSTRAINT CK_T1_EXTRA CHECK (ID < 1000);
+ALTER TABLE ANALYTICS.CORE.T1 ADD CHECK (RATE != 50.0);
+`;
+    const project = parseSnowflakeDDLToCanonicalProject(ddl);
+    const table = project.physical_model.tables[0];
+    const checks = table.check_constraints;
+
+    // Check ids:
+    // Unnamed 1: from column inline CHECK (ID > 0) -> check:ANALYTICS.CORE.T1#1
+    // Unnamed 2: from table-level CHECK (RATE <= 100.0) -> check:ANALYTICS.CORE.T1#2
+    // Unnamed 3: from ALTER TABLE ADD CHECK (RATE != 50.0) -> check:ANALYTICS.CORE.T1#3
+    // Named: CK_T1_RATE -> constraint:ANALYTICS.CORE.T1.CK_T1_RATE
+    // Named: CK_T1_EXTRA -> constraint:ANALYTICS.CORE.T1.CK_T1_EXTRA
+    assert.equal(checks.length, 5);
+
+    const checksById = new Map(checks.map((c) => [c.id, c]));
+    assert.deepEqual(checksById.get("check:ANALYTICS.CORE.T1#1"), {
+      id: "check:ANALYTICS.CORE.T1#1",
+      name: null,
+      expression: "ID > 0",
+      validation: "VALIDATE",
+      name_origin: "unnamed",
+    });
+    assert.deepEqual(checksById.get("check:ANALYTICS.CORE.T1#2"), {
+      id: "check:ANALYTICS.CORE.T1#2",
+      name: null,
+      expression: "RATE <= 100.0",
+      validation: "VALIDATE",
+      name_origin: "unnamed",
+    });
+    assert.deepEqual(checksById.get("check:ANALYTICS.CORE.T1#3"), {
+      id: "check:ANALYTICS.CORE.T1#3",
+      name: null,
+      expression: "RATE != 50.0",
+      validation: "VALIDATE",
+      name_origin: "unnamed",
+    });
+    assert.deepEqual(
+      checksById.get("constraint:ANALYTICS.CORE.T1.CK_T1_RATE"),
+      {
+        id: "constraint:ANALYTICS.CORE.T1.CK_T1_RATE",
+        name: "CK_T1_RATE",
+        expression: "RATE >= 0.0",
+        validation: "VALIDATE",
+        name_origin: "explicit",
+      },
+    );
+    assert.deepEqual(
+      checksById.get("constraint:ANALYTICS.CORE.T1.CK_T1_EXTRA"),
+      {
+        id: "constraint:ANALYTICS.CORE.T1.CK_T1_EXTRA",
+        name: "CK_T1_EXTRA",
+        expression: "ID < 1000",
+        validation: "VALIDATE",
+        name_origin: "explicit",
+      },
+    );
+  });
+
+  it("parses complex check expressions: nested parens, quoted string containing ')' and 'CHECK', and escaped quotes", () => {
+    const ddl = `
+CREATE DATABASE IF NOT EXISTS ANALYTICS;
+CREATE SCHEMA IF NOT EXISTS ANALYTICS.CORE;
+
+CREATE TABLE ANALYTICS.CORE.COMPLEX (
+    CODE VARCHAR(50) NOT NULL,
+    STATUS VARCHAR(20) NOT NULL,
+    CONSTRAINT CK_COMPLEX CHECK (((CODE != ')' AND STATUS != 'CHECK') OR (CODE = 'O''Reilly')) AND NOT (STATUS IS NULL))
+);
+`;
+    const project = parseSnowflakeDDLToCanonicalProject(ddl);
+    const check = project.physical_model.tables[0].check_constraints[0];
+    assert.equal(
+      check.expression,
+      "((CODE != ')' AND STATUS != 'CHECK') OR (CODE = 'O''Reilly')) AND NOT (STATUS IS NULL)",
+    );
+  });
+
+  it("rejects CHECK (...) NOT ENFORCED in all DDL forms", () => {
+    const tableNamed = `
+CREATE DATABASE IF NOT EXISTS D; CREATE SCHEMA IF NOT EXISTS D.S;
+CREATE TABLE D.S.T (ID NUMBER, CONSTRAINT CK_ID CHECK (ID > 0) NOT ENFORCED);
+`;
+    assert.throws(
+      () => parseSnowflakeDDLToCanonicalProject(tableNamed),
+      /unsupported Snowflake CHECK constraint.*NOT ENFORCED/i,
+    );
+
+    const tableUnnamed = `
+CREATE DATABASE IF NOT EXISTS D; CREATE SCHEMA IF NOT EXISTS D.S;
+CREATE TABLE D.S.T (ID NUMBER, CHECK (ID > 0) NOT ENFORCED);
+`;
+    assert.throws(
+      () => parseSnowflakeDDLToCanonicalProject(tableUnnamed),
+      /unsupported Snowflake CHECK constraint.*NOT ENFORCED/i,
+    );
+
+    const columnInline = `
+CREATE DATABASE IF NOT EXISTS D; CREATE SCHEMA IF NOT EXISTS D.S;
+CREATE TABLE D.S.T (ID NUMBER CHECK (ID > 0) NOT ENFORCED);
+`;
+    assert.throws(
+      () => parseSnowflakeDDLToCanonicalProject(columnInline),
+      /unsupported Snowflake column clause.*NOT ENFORCED/i,
+    );
+
+    const alterNamed = `
+CREATE DATABASE IF NOT EXISTS D; CREATE SCHEMA IF NOT EXISTS D.S;
+CREATE TABLE D.S.T (ID NUMBER);
+ALTER TABLE D.S.T ADD CONSTRAINT CK_ID CHECK (ID > 0) NOT ENFORCED;
+`;
+    assert.throws(
+      () => parseSnowflakeDDLToCanonicalProject(alterNamed),
+      /unsupported Snowflake ALTER TABLE statement.*NOT ENFORCED/i,
+    );
+
+    const alterUnnamed = `
+CREATE DATABASE IF NOT EXISTS D; CREATE SCHEMA IF NOT EXISTS D.S;
+CREATE TABLE D.S.T (ID NUMBER);
+ALTER TABLE D.S.T ADD CHECK (ID > 0) NOT ENFORCED;
+`;
+    assert.throws(
+      () => parseSnowflakeDDLToCanonicalProject(alterUnnamed),
+      /unsupported Snowflake ALTER TABLE statement.*NOT ENFORCED/i,
+    );
+  });
+
+  it("satisfies render -> parse -> render determinism for CHECK constraints", () => {
+    const checks = [
+      {
+        id: "check:ANALYTICS.CORE.T#1",
+        name: null,
+        expression: "PRICE > 0",
+        validation: "VALIDATE",
+        name_origin: "unnamed",
+      },
+      {
+        id: "constraint:ANALYTICS.CORE.T.CK_DISCOUNT",
+        name: "CK_DISCOUNT",
+        expression: "DISCOUNT >= 0 AND DISCOUNT <= 1",
+        validation: "VALIDATE",
+        name_origin: "explicit",
+      },
+    ];
+    const initialProject = {
+      project_version: "1",
+      physical_model: {
+        model_version: "2",
+        name: "ROUNDTRIP_MODEL",
+        namespaces: [
+          {
+            id: "namespace:ANALYTICS.CORE",
+            catalog: "ANALYTICS",
+            schema: "CORE",
+          },
+        ],
+        tables: [
+          {
+            id: "table:ANALYTICS.CORE.T",
+            namespace_id: "namespace:ANALYTICS.CORE",
+            name: "T",
+            kind: "table",
+            columns: [
+              {
+                id: "column:ANALYTICS.CORE.T.PRICE",
+                name: "PRICE",
+                ordinal: 1,
+                data_type: {
+                  family: "NUMBER",
+                  text: "NUMBER(10, 2)",
+                  precision: 10,
+                  scale: 2,
+                  length: null,
+                  vector_element_type: null,
+                  vector_dimension: null,
+                },
+                nullable: false,
+                default: null,
+                comment: null,
+              },
+              {
+                id: "column:ANALYTICS.CORE.T.DISCOUNT",
+                name: "DISCOUNT",
+                ordinal: 2,
+                data_type: {
+                  family: "NUMBER",
+                  text: "NUMBER(5, 2)",
+                  precision: 5,
+                  scale: 2,
+                  length: null,
+                  vector_element_type: null,
+                  vector_dimension: null,
+                },
+                nullable: false,
+                default: null,
+                comment: null,
+              },
+            ],
+            constraints: [],
+            check_constraints: checks,
+            comment: null,
+          },
+        ],
+        relationships: [],
+      },
+    };
+
+    const rendered1 = renderCanonicalSnowflakeDDL(initialProject);
+    const parsed = parseSnowflakeDDLToCanonicalProject(rendered1, {
+      name: "ROUNDTRIP_MODEL",
+    });
+    const rendered2 = renderCanonicalSnowflakeDDL(parsed);
+    assert.equal(rendered2, rendered1);
+  });
+});

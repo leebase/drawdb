@@ -1149,6 +1149,18 @@ function validateProjectOrModel(projectOrModel) {
 }
 
 export function canonicalProjectToTerraformHcl(projectOrModel) {
+  // Wave 2A: Terraform provider CHECK syntax is unverified, so export fails
+  // closed rather than silently omitting an enforced predicate. Checked on the
+  // raw input because a v1-shaped project carrying CHECK data would otherwise
+  // fail on key shape before reaching this semantic error.
+  const rawModel = projectOrModel?.physical_model ?? projectOrModel;
+  for (const table of rawModel?.tables ?? []) {
+    if (Array.isArray(table.check_constraints) && table.check_constraints.length > 0) {
+      fail(
+        `unsupported CHECK constraints on table ${table.name}; Terraform export does not support CHECK constraints`,
+      );
+    }
+  }
   const model = validateProjectOrModel(projectOrModel);
   const databaseItems = [...new Set(model.namespaces.map((ns) => ns.catalog))]
     .sort()
