@@ -630,6 +630,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
       precision: null,
       scale: null,
       length: 8_388_608,
+      vector_element_type: null,
+      vector_dimension: null,
     });
   });
 
@@ -657,6 +659,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: 38,
           scale: 0,
           length: null,
+          vector_element_type: null,
+          vector_dimension: null,
         },
         {
           family: "NUMBER",
@@ -664,6 +668,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: 38,
           scale: 0,
           length: null,
+          vector_element_type: null,
+          vector_dimension: null,
         },
         {
           family: "VARCHAR",
@@ -671,6 +677,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: null,
           scale: null,
           length: 1,
+          vector_element_type: null,
+          vector_dimension: null,
         },
         {
           family: "VARCHAR",
@@ -678,6 +686,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: null,
           scale: null,
           length: 16_777_216,
+          vector_element_type: null,
+          vector_dimension: null,
         },
         {
           family: "BINARY",
@@ -685,6 +695,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: null,
           scale: null,
           length: 8_388_608,
+          vector_element_type: null,
+          vector_dimension: null,
         },
         {
           family: "FLOAT",
@@ -692,6 +704,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: null,
           scale: null,
           length: null,
+          vector_element_type: null,
+          vector_dimension: null,
         },
         {
           family: "TIMESTAMP_NTZ",
@@ -699,6 +713,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: 9,
           scale: null,
           length: null,
+          vector_element_type: null,
+          vector_dimension: null,
         },
       ],
     );
