@@ -509,6 +509,8 @@ describe("Wave 2A accepted Snowflake regressions", () => {
           precision: null,
           scale: null,
           length: 16_777_216,
+          vector_element_type: null,
+          vector_dimension: null,
         },
         {
           family: "BINARY",
@@ -516,6 +518,8 @@ describe("Wave 2A accepted Snowflake regressions", () => {
           precision: null,
           scale: null,
           length: 8_388_608,
+          vector_element_type: null,
+          vector_dimension: null,
         },
       ],
     );

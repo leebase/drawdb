@@ -42,8 +42,10 @@ function semanticConstraint(constraint) {
 }
 
 function semanticCheckConstraint(checkConstraint) {
+  // Round-trip parity compares transport-preservable semantics, not local
+  // identity fields the transport cannot encode: DDL carries no editor ids,
+  // so CHECKs are identified by name, expression, validation, and origin.
   return {
-    id: checkConstraint.id,
     name: checkConstraint.name ?? null,
     expression: checkConstraint.expression,
     validation: checkConstraint.validation ?? null,
@@ -80,9 +82,9 @@ export function semanticModel(projectOrModel) {
       kind: table.kind,
       columns: (table.columns ?? []).map(semanticColumn),
       constraints: (table.constraints ?? []).map(semanticConstraint),
-      check_constraints: (table.check_constraints ?? []).map(
-        semanticCheckConstraint,
-      ),
+      check_constraints: (table.check_constraints ?? [])
+        .map(semanticCheckConstraint)
+        .sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))),
       comment: table.comment ?? null,
     })),
     relationships: (model.relationships ?? []).map(semanticRelationship),

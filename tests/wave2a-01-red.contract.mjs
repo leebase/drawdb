@@ -586,6 +586,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: null,
           scale: null,
           length: 134_217_728,
+          vector_element_type: null,
+          vector_dimension: null,
         },
         {
           family: "BINARY",
@@ -593,6 +595,8 @@ describe("Wave 2A explicit RED contracts (known defects)", () => {
           precision: null,
           scale: null,
           length: 67_108_864,
+          vector_element_type: null,
+          vector_dimension: null,
         },
       ],
     );
