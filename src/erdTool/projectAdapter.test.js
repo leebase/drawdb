@@ -3336,3 +3336,46 @@ ALTER TABLE D.S.T ADD CHECK (ID > 0) NOT ENFORCED;
     assert.equal(rendered2, rendered1);
   });
 });
+
+describe("W2A-04 cross-array constraint id uniqueness", () => {
+  it("rejects a named CHECK whose canonical id collides with a key constraint id", () => {
+    const diagram = {
+      database: "snowflake",
+      title: "COLLIDE",
+      tables: [
+        {
+          id: "t",
+          name: "T",
+          x: 0,
+          y: 0,
+          fields: [
+            { id: "f", name: "ID", type: "NUMBER", size: "38,0", default: "", check: "", primary: false, unique: false, notNull: true, increment: false, comment: "" },
+          ],
+          checkConstraints: [
+            { id: "check-1", name: "SAME_NAME", expression: "ID > 0", validation: "VALIDATE", nameOrigin: "explicit" },
+          ],
+        },
+      ],
+      relationships: [],
+      transform: { pan: { x: 0, y: 0 }, zoom: 1 },
+    };
+    const project = diagramToCanonicalProject(diagram);
+    const table = project.physical_model.tables[0];
+    const keyId = table.check_constraints[0].id;
+    table.check_constraints = [{ ...table.check_constraints[0], id: keyId }];
+    table.constraints = [
+      {
+        id: keyId,
+        name: "SAME_NAME",
+        kind: "unique",
+        columns: [table.columns[0].id],
+        referenced_table_id: null,
+        referenced_columns: [],
+      },
+    ];
+    assert.throws(
+      () => canonicalProjectToDiagram(project),
+      /used by both constraints and check_constraints/,
+    );
+  });
+});

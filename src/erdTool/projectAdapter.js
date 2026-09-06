@@ -1242,6 +1242,15 @@ function validatePhysicalModelV2(model) {
     }
     const constraintIds = constraints.map((constraint) => constraint.id);
     requireUniqueIds(constraintIds, "constraints");
+    // Named CHECKs and key constraints share the constraint:<...> id scheme, so
+    // uniqueness must hold across both arrays, not just within each.
+    for (const constraintId of constraintIds) {
+      if (checkIds.has(constraintId)) {
+        fail(
+          `constraint id ${constraintId} is used by both constraints and check_constraints`,
+        );
+      }
+    }
     const primaryKeyCount = constraints.filter(
       (c) => c.kind === "primary_key",
     ).length;
